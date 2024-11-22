@@ -28,7 +28,7 @@ def collate_fn(batch):
 
 
     labels = torch.tensor([item['label'] for item in batch], dtype=torch.float32).view(-1, 1)
-
+    precursor_mz = torch.tensor([item['precursor_mz'] for item in batch], dtype=torch.float32).view(-1, 1)
     # Pad sequences to the maximum length in the batch
     max_len = max(mz.shape[0] for mz in mz_arrays)
     mz_padded = torch.zeros(len(batch), max_len)
@@ -43,7 +43,8 @@ def collate_fn(batch):
         'mz': mz_padded,
         'intensity': intensity_padded,
         # 'instrument_settings': instrument_settings,
-        'labels': labels
+        'labels': labels,
+        'precursor_mz': precursor_mz
     }
 
 
@@ -98,5 +99,5 @@ if __name__ == '__main__':
         lr=0.001
     )
 
-    trainer = pl.Trainer(max_epochs=10, logger=csv_logger)
+    trainer = pl.Trainer(max_epochs=30, logger=csv_logger)
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)

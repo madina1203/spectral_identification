@@ -6,6 +6,36 @@ from torchmetrics.classification import BinaryAccuracy, BinaryPrecision
 from torchmetrics.classification import BinaryF1Score, BinaryRecall
 from depthcharge.encoders import FloatEncoder
 
+
+class MyModel(SpectrumTransformerEncoder):
+    """Our custom model class."""
+    def __init__(self, *args, **kwargs):
+        """Add parameters for the global token hook."""
+        super().__init__(*args, **kwargs)
+        self.precursor_mz_encoder = FloatEncoder(self.d_model)
+
+    def global_token_hook(self, mz_array, intensity_array, precursor_mz=None, *args, **kwargs):
+        """Return a simple representation of the precursor."""
+        if precursor_mz is None:
+            raise ValueError("precursor_mz must be provided in the batch.")
+
+            # Ensure precursor_mz has shape (batch_size, 1)
+        precursor_mz = precursor_mz.type_as(mz_array).view(-1, 1)
+        print(f"precursor_mz shape: {precursor_mz.shape}")  # Debug statement
+
+            # Encode the precursor m/z
+        mz_rep = self.precursor_mz_encoder(precursor_mz)
+        print(f"mz_rep shape before squeeze: {mz_rep.shape}")  # Debug statement
+
+            # Squeeze the sequence length dimension if necessary
+        if mz_rep.dim() == 3 and mz_rep.shape[1] == 1:
+            mz_rep = mz_rep.squeeze(1)
+            print(f"mz_rep shape after squeeze: {mz_rep.shape}")  # Debug statement
+
+            # Now mz_rep should have shape (batch_size, d_model)
+        return mz_rep  # Remove batch dimension and return
+
+
 class SimpleSpectraTransformer(pl.LightningModule):
     """Simplified model using only SpectrumTransformerEncoder for MS1 spectra."""
 
@@ -24,11 +54,11 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
 
         # Transformer encoder for spectra data from DepthCharge
-        self.spectrum_encoder = SpectrumTransformerEncoder(
+        self.spectrum_encoder = MyModel(
             d_model=d_model,
             n_layers=n_layers,
             dropout=dropout,
-            global_token_hook= self.global_token_hook,
+
         )
 
         # Fully connected layers for binary classification
@@ -48,19 +78,16 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.val_f1 = BinaryF1Score()
         self.val_recall = BinaryRecall()
 
-    def global_token_hook(self, mz_array, intensity_array, *args, **kwargs):
-        """Embed precursor m/z and charge."""
-        precursor_mz = kwargs["precursor_mz"].type_as(mz_array)[None, :]
-        mz_rep = self.precursor_mz_encoder(precursor_mz)
-        return mz_rep[0,:]
+
     def forward(self, batch):
         """Forward pass through the transformer and classification layers."""
         # Spectra data (m/z and intensity) processing with SpectrumTransformerEncoder
         mz_array = batch["mz"].float()
         intensity_array = batch["intensity"].float()
+        precursor_mz = batch["precursor_mz"].float()  # Get precursor m/z from the batch
 
         # Forward pass through DepthCharge Transformer for spectra
-        spectra_emb, _ = self.spectrum_encoder(mz_array, intensity_array)
+        spectra_emb, _ = self.spectrum_encoder(mz_array, intensity_array, precursor_mz=precursor_mz)
         spectra_emb = spectra_emb[:, 0, :]  # Get the global embedding (first token)
 
         # Classification layers
@@ -71,9 +98,11 @@ class SimpleSpectraTransformer(pl.LightningModule):
     def step(self, batch):
         """Calculate loss and perform the forward pass."""
         logits = self(batch)
-        target = batch["labels"].float()
-        loss = self.bce_loss(logits.view(-1, 1), target.view(-1, 1))
-        preds = torch.sigmoid(logits)  # Apply sigmoid to logits for metrics
+        target = batch["labels"].int()
+        loss = self.bce_loss(logits.view(-1, 1), target.view(-1, 1).float())
+
+        probs = torch.sigmoid(logits)
+        preds = (probs >= 0.5).int()
         return loss, preds, target
 
     def training_step(self, batch, batch_idx):

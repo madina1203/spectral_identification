@@ -105,7 +105,7 @@ class SimpleMassSpecDataset(Dataset):
                     ms2_info = ms2_scan_info[scan_number]
                     # instrument_settings = [float(ms2_info[col]) for col in instrument_settings_cols if col in ms2_info]
                     # instrument_settings = np.array(instrument_settings, dtype=float)  # Convert to NumPy array
-
+                    selected_mass = ms2_info.get('SelectedMass1', None)
                     label = ms2_info['label']  # Adjust if your label column has a different name
 
                     # Append the data pair with preprocessed MS1 data and MS2 data
@@ -115,6 +115,7 @@ class SimpleMassSpecDataset(Dataset):
                         'mz_array': current_ms1_data['mz_array'],
                         'intensity_array': current_ms1_data['intensity_array'],
                         # 'instrument_settings': instrument_settings,
+                        'precursor_mz': selected_mass,
                         'label': label
                     })
                 else:
