@@ -3,7 +3,6 @@ os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 
 from src.transformers.model import SpectraTransformerWithInstrumentSettings
-from src.transformers.model_simplified import SpectraTransformerWithInstrumentSettingsSimple
 import torch  # Import PyTorch
 import torch.nn as nn  # Import PyTorch's neural network module
 import torch.nn.functional as F  # Import PyTorch's functional module
@@ -112,8 +111,8 @@ if __name__ == "__main__":
     # model = SpectraTransformerWithInstrumentSettings(d_model=64, n_layers=4, dropout=0.1)
      # Define the trainer
     #simplified model
-    model = SpectraTransformerWithInstrumentSettingsSimple(d_model=64, n_layers = 2, dropout=0.1)
-    trainer = pl.Trainer(max_epochs=20, logger=csv_logger)
+    model = SpectraTransformerWithInstrumentSettings(d_model=64, n_layers = 2, dropout=0.1)
+    trainer = pl.Trainer(max_epochs=5, logger=csv_logger)
     #  Train the model
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 # Example batch data (batch size = 16, n_peaks = 100, d_model = 128)

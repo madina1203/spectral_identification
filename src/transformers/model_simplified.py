@@ -64,8 +64,9 @@ class SimpleSpectraTransformer(pl.LightningModule):
         # Fully connected layers for binary classification
         self.fc_output = nn.Linear(d_model, 1)
 
+        class_weights = torch.tensor([1 - 0.17, 0.17], dtype=torch.float32)  # Adjust weights based on proportions
 
-        # Loss function
+        #self.bce_loss = nn.BCEWithLogitsLoss(pos_weight=class_weights[1])
         self.bce_loss = nn.BCEWithLogitsLoss()
 
         # Define metrics for training and validation
@@ -103,6 +104,8 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
         probs = torch.sigmoid(logits)
         preds = (probs >= 0.5).int()
+        if target.numel() == 0 or preds.numel() == 0:
+            raise ValueError("Empty predictions or targets in batch.")
         return loss, preds, target
 
     def training_step(self, batch, batch_idx):
@@ -117,10 +120,10 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.train_recall.update(preds, targets)
 
         # Log metrics
-        self.log("train_accuracy", self.train_accuracy, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("train_precision", self.train_precision, on_step=False, on_epoch=True)
-        self.log("train_f1", self.train_f1, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("train_recall", self.train_recall, on_step=False, on_epoch=True, prog_bar=True)
+        # self.log("train_accuracy", self.train_accuracy, on_step=False, on_epoch=True, prog_bar=True)
+        # self.log("train_precision", self.train_precision, on_step=False, on_epoch=True)
+        # self.log("train_f1", self.train_f1, on_step=False, on_epoch=True, prog_bar=True)
+        # self.log("train_recall", self.train_recall, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss
 
@@ -136,15 +139,19 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.val_recall.update(preds, targets)
 
         # Log metrics
-        self.log("val_accuracy", self.val_accuracy, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_precision", self.val_precision, on_step=False, on_epoch=True)
-        self.log("val_f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_recall", self.val_recall, on_step=False, on_epoch=True, prog_bar=True)
+        # self.log("val_accuracy", self.val_accuracy, on_step=False, on_epoch=True, prog_bar=True)
+        # self.log("val_precision", self.val_precision, on_step=False, on_epoch=True)
+        # self.log("val_f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
+        # self.log("val_recall", self.val_recall, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss
 
     def on_train_epoch_end(self):
         """Reset training metrics at the end of each epoch."""
+        self.log("train_accuracy", self.train_accuracy.compute(), prog_bar=True)
+        self.log("train_precision", self.train_precision.compute())
+        self.log("train_f1", self.train_f1.compute(), prog_bar=True)
+        self.log("train_recall", self.train_recall.compute(), prog_bar=True)
         self.train_accuracy.reset()
         self.train_precision.reset()
         self.train_f1.reset()
@@ -152,6 +159,11 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         """Reset validation metrics at the end of each epoch."""
+        self.log("val_accuracy", self.val_accuracy.compute(), prog_bar=True)
+        self.log("val_precision", self.val_precision.compute())
+        self.log("val_f1", self.val_f1.compute(), prog_bar=True)
+        self.log("val_recall", self.val_recall.compute(), prog_bar=True)
+
         self.val_accuracy.reset()
         self.val_precision.reset()
         self.val_f1.reset()

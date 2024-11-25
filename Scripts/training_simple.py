@@ -5,16 +5,16 @@ import torch  # Import PyTorch
 import torch.nn as nn  # Import PyTorch's neural network module
 import torch.nn.functional as F  # Import PyTorch's functional module
 import lightning.pytorch as pl  # Import PyTorch Lightning
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 import numpy as np
 from src.transformers.simpleDataset import SimpleMassSpecDataset
 from src.transformers.model_simplified import SimpleSpectraTransformer
 from torch.utils.data import ConcatDataset
 from lightning.pytorch.loggers import CSVLogger
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import train_test_split
 
 # Set the seed for reproducibility
-SEED = 42
+SEED =1
 pl.seed_everything(SEED, workers=True)
 
 # Define a custom collate function to handle variable-length sequences
@@ -62,22 +62,39 @@ if __name__ == '__main__':
     datasets = [SimpleMassSpecDataset(mzml, csv) for mzml, csv in zip(mzml_files, csv_files)]
     combined_dataset = ConcatDataset(datasets)
     labels = [combined_dataset[i]['label'] for i in range(len(combined_dataset))]
-    print(len(combined_dataset))
+    labels = np.array(labels, dtype=np.int64)
+
     for i, sample in enumerate(combined_dataset):
         print(f"Sample {i}: {sample}")
         if 'mz_array' not in sample or 'intensity_array' not in sample or 'label' not in sample:
             print(f"Missing keys in sample {i}")
-    stratified_split = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=SEED)
-    train_indices, val_indices = next(stratified_split.split(np.zeros(len(labels)), labels))
+    # stratified_split = StratifiedShuffleSplit(n_splits=1, test_size=0.15, random_state=SEED)
+    # train_indices, val_indices = next(stratified_split.split(np.zeros(len(labels)), labels))
+    train_indices, val_indices = train_test_split(
+        np.arange(len(combined_dataset)), test_size=0.4, random_state=SEED
+    )
 
     train_dataset = Subset(combined_dataset, train_indices)
     val_dataset = Subset(combined_dataset, val_indices)
-    batch_size = 8
+    # Calculate class weights for the sampler
+    train_labels = [combined_dataset[i]['label'] for i in train_indices]
+    class_counts = np.bincount(train_labels)  # Count occurrences of each class
+    class_weights = 1.0 / class_counts  # Inverse of class frequency
+    sample_weights = [class_weights[label] for label in train_labels]  # Weight for each sample in the train dataset
+
+    # Create the WeightedRandomSampler for the training set
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),  # Number of samples to draw
+        replacement=True  # Allow replacement to balance classes
+    )
+
+    batch_size = 64
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        # sampler=sampler,
         num_workers=7,
         collate_fn=collate_fn,
         persistent_workers=True
@@ -91,13 +108,17 @@ if __name__ == '__main__':
         collate_fn=collate_fn,
         persistent_workers=True
     )
+    # print(f"Number of samples in the full dataset: {len(combined_dataset)}")
+    # print(f"Number of training samples: {len(train_indices)}")
+    # print(f"Number of validation samples: {len(val_indices)}")
 
     model = SimpleSpectraTransformer(
-        d_model=128,  # Adjust based on your needs
-        n_layers=4,   # Adjust based on your needs
+        d_model=64,
+        n_layers=2,   # Adjust based on your needs
         dropout=0.1,
         lr=0.001
     )
 
-    trainer = pl.Trainer(max_epochs=30, logger=csv_logger)
+    trainer = pl.Trainer(max_epochs=5, logger=csv_logger, log_every_n_steps=10  # Log every 10 steps, or set to 1 for every batch
+)
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
