@@ -12,7 +12,7 @@ from src.transformers.model_simplified import SimpleSpectraTransformer
 from torch.utils.data import ConcatDataset
 from lightning.pytorch.loggers import CSVLogger
 from sklearn.model_selection import train_test_split
-
+from sklearn.model_selection import StratifiedShuffleSplit
 # Set the seed for reproducibility
 SEED =1
 pl.seed_everything(SEED, workers=True)
@@ -68,10 +68,10 @@ if __name__ == '__main__':
         print(f"Sample {i}: {sample}")
         if 'mz_array' not in sample or 'intensity_array' not in sample or 'label' not in sample:
             print(f"Missing keys in sample {i}")
-    # stratified_split = StratifiedShuffleSplit(n_splits=1, test_size=0.15, random_state=SEED)
+    # stratified_split = StratifiedShuffleSplit(n_splits=1, test_size=0.30, random_state=SEED)
     # train_indices, val_indices = next(stratified_split.split(np.zeros(len(labels)), labels))
     train_indices, val_indices = train_test_split(
-        np.arange(len(combined_dataset)), test_size=0.4, random_state=SEED
+        np.arange(len(combined_dataset)), test_size=0.3, random_state=SEED
     )
 
     train_dataset = Subset(combined_dataset, train_indices)
@@ -115,10 +115,10 @@ if __name__ == '__main__':
     model = SimpleSpectraTransformer(
         d_model=64,
         n_layers=2,   # Adjust based on your needs
-        dropout=0.1,
-        lr=0.001
+        dropout=0.3,
+        lr=0.0001
     )
 
-    trainer = pl.Trainer(max_epochs=5, logger=csv_logger, log_every_n_steps=10  # Log every 10 steps, or set to 1 for every batch
+    trainer = pl.Trainer(max_epochs=50, logger=csv_logger, log_every_n_steps=10  # Log every 10 steps, or set to 1 for every batch
 )
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)

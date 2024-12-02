@@ -13,7 +13,7 @@ class MyModel(SpectrumTransformerEncoder):
         """Add parameters for the global token hook."""
         super().__init__(*args, **kwargs)
         self.precursor_mz_encoder = FloatEncoder(self.d_model)
-
+        # self.apply(self.init_weights)
     def global_token_hook(self, mz_array, intensity_array, precursor_mz=None, *args, **kwargs):
         """Return a simple representation of the precursor."""
         if precursor_mz is None:
@@ -34,6 +34,18 @@ class MyModel(SpectrumTransformerEncoder):
 
             # Now mz_rep should have shape (batch_size, d_model)
         return mz_rep  # Remove batch dimension and return
+
+    # def init_weights(self, module):
+    #     """Custom weight initialization logic."""
+    #     if isinstance(module, nn.Linear):  # Initialize Linear layers
+    #         nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+    #         if module.bias is not None:
+    #             nn.init.zeros_(module.bias)
+    #     elif isinstance(module, nn.LayerNorm):  # Initialize LayerNorm layers
+    #         nn.init.ones_(module.weight)
+    #         nn.init.zeros_(module.bias)
+    #     elif isinstance(module, nn.Embedding):  # Initialize embeddings if used
+    #         nn.init.normal_(module.weight, mean=0, std=1)
 
 
 class SimpleSpectraTransformer(pl.LightningModule):
@@ -78,8 +90,15 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.train_recall = BinaryRecall()
         self.val_f1 = BinaryF1Score()
         self.val_recall = BinaryRecall()
+        # Apply He initialization to all relevant layers
+        # self.apply(self.init_weights)
 
-
+    # def init_weights(self, module):
+    #     """Apply He initialization to layers."""
+    #     if isinstance(module, nn.Linear):
+    #         nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+    #         if module.bias is not None:
+    #             nn.init.zeros_(module.bias)
     def forward(self, batch):
         """Forward pass through the transformer and classification layers."""
         # Spectra data (m/z and intensity) processing with SpectrumTransformerEncoder
@@ -171,5 +190,5 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
     def configure_optimizers(self):
         """Configure optimizer for training."""
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         return optimizer
