@@ -22,9 +22,9 @@ def collate_fn(batch):
     mz_arrays = [torch.tensor(item['mz_array'], dtype=torch.float32) for item in batch]
     intensity_arrays = [torch.tensor(item['intensity_array'], dtype=torch.float32) for item in batch]
     # Convert list of instrument settings arrays to a single NumPy array first
-    # instrument_settings = np.array([item['instrument_settings'] for item in batch], dtype=np.float32)
+    instrument_settings = np.array([item['instrument_settings'] for item in batch], dtype=np.float32)
     # # Then convert the NumPy array to a PyTorch tensor
-    # instrument_settings = torch.tensor(instrument_settings, dtype=torch.float32)
+    instrument_settings = torch.tensor(instrument_settings, dtype=torch.float32)
 
 
     labels = torch.tensor([item['label'] for item in batch], dtype=torch.float32).view(-1, 1)
@@ -42,7 +42,7 @@ def collate_fn(batch):
     return {
         'mz': mz_padded,
         'intensity': intensity_padded,
-        # 'instrument_settings': instrument_settings,
+        'instrument_settings': instrument_settings,
         'labels': labels,
         'precursor_mz': precursor_mz
     }

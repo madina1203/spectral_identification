@@ -6,13 +6,27 @@ import numpy as np
 import spectrum_utils.spectrum as sus
 
 class SimpleMassSpecDataset(Dataset):
-    def __init__(self, mzml_file, csv_file):
+    def __init__(self, mzml_file, csv_file, scaling="standardize"):
+        """
+               Initialize the dataset with feature scaling, excluding certain columns.
+               :param mzml_file: Path to the mzML file.
+               :param csv_file: Path to the CSV file.
+               :param scaling: Type of scaling ('standardize').
+               """
         self.mzml_file = mzml_file
         self.csv_file = csv_file
+        #adding feature scaling
+        self.scaling = scaling
+        self.feature_stats = None  # To store mean and std for standardization
+        self.excluded_columns = {"Scan", "Polarity"}  # Columns to exclude from scaling
 
         # Load scans and MS2 data
         self.scan_list = self.load_scans()
         self.ms2_data = self.load_ms2_data()
+
+        # Compute statistics (mean and std) for instrument settings
+        if self.scaling == "standardize":
+            self.compute_stats()
 
         # Align MS2 scans with their preceding processed MS1 scans
         self.data_pairs = self.align_scans()
@@ -69,19 +83,66 @@ class SimpleMassSpecDataset(Dataset):
         ms2_df['Scan'] = ms2_df['Scan'].astype(int)  # Ensure 'Scan' column is integer
         return ms2_df
 
-    # def get_instrument_settings_columns(self):
-    #     return ["Scan", "MSOrder", "Polarity", "RT [min]", "LowMass", "HighMass",
-    #             "TIC", "BasePeakPosition", "BasePeakIntensity", "Charge State",
-    #             "Monoisotopic M/Z", "Ion Injection Time (ms)", "MS2 Isolation Width",
-    #             "Conversion Parameter C", "LM Search Window (ppm)", "Number of LM Found",
-    #             "Mild Trapping Mode", "Source CID eV", "SelectedMass1", "Activation1",
-    #             "Energy1", "Orbitrap Resolution", "AGC Target", "HCD Energy V(1)", "HCD Energy V(2)",
-    #             "HCD Energy V(3)", "Number of Lock Masses", "LM m/z-Correction (ppm)"]
+    def get_instrument_settings_columns(self):
+        return ["Scan", "MSOrder", "Polarity", "RT [min]", "LowMass", "HighMass",
+                "TIC", "BasePeakPosition", "BasePeakIntensity", "Charge State",
+                "Monoisotopic M/Z", "Ion Injection Time (ms)", "MS2 Isolation Width",
+                "Conversion Parameter C", "LM Search Window (ppm)", "Number of LM Found",
+                "Mild Trapping Mode", "Source CID eV", "Activation1",
+                "Energy1", "Orbitrap Resolution", "AGC Target", "HCD Energy V(1)", "HCD Energy V(2)",
+                "HCD Energy V(3)", "Number of Lock Masses", "LM m/z-Correction (ppm)"]
+
+    def compute_stats(self):
+        """
+        Compute mean and std for each instrument settings column, excluding certain columns.
+        """
+        all_instrument_settings = []
+        instrument_settings_cols = [
+            col for col in self.get_instrument_settings_columns() if col not in self.excluded_columns
+        ]
+
+        for _, ms2_info in self.ms2_data.iterrows():
+            instrument_settings = [
+                float(ms2_info[col]) for col in instrument_settings_cols if col in ms2_info
+            ]
+            all_instrument_settings.append(instrument_settings)
+
+        all_instrument_settings = np.array(all_instrument_settings)
+        self.feature_stats = {
+            i: {"mean": np.mean(all_instrument_settings[:, i]), "std": np.std(all_instrument_settings[:, i])}
+            for i in range(all_instrument_settings.shape[1])
+        }
+
+    def scale_features(self, instrument_settings):
+        """
+        Standardize the instrument settings using internally computed mean and std.
+        Skip excluded columns and SelectedMass1.
+        :param instrument_settings: Array of raw instrument settings.
+        :return: Standardized instrument settings.
+        """
+        scaled_settings = []
+        stats_index = 0  # Index for stats, skips excluded columns
+
+        # Iterate over instrument settings
+        for col_index, value in enumerate(instrument_settings):
+            # Check if the current column is excluded or should not be scaled
+            if col_index in self.excluded_columns or col_index >= len(self.feature_stats):
+                # Leave excluded columns unchanged
+                scaled_settings.append(value)
+            else:
+                # Apply standardization
+                mean_val = self.feature_stats[stats_index]["mean"]
+                std_val = self.feature_stats[stats_index]["std"]
+                scaled_value = (value - mean_val) / std_val if std_val > 0 else 0
+                scaled_settings.append(scaled_value)
+                stats_index += 1  # Increment stats_index only for scaled columns
+
+        return np.array(scaled_settings, dtype=np.float32)
 
     def align_scans(self):
         data_pairs = []
         ms2_scan_info = self.ms2_data.set_index('Scan').to_dict('index')
-        # instrument_settings_cols = self.get_instrument_settings_columns()
+        instrument_settings_cols = self.get_instrument_settings_columns()
 
         current_ms1_data = None
         current_ms1_scan_number = None
@@ -103,8 +164,10 @@ class SimpleMassSpecDataset(Dataset):
                 # Check if the MS2 scan is in the CSV data
                 if scan_number in ms2_scan_info and current_ms1_data is not None:
                     ms2_info = ms2_scan_info[scan_number]
-                    # instrument_settings = [float(ms2_info[col]) for col in instrument_settings_cols if col in ms2_info]
-                    # instrument_settings = np.array(instrument_settings, dtype=float)  # Convert to NumPy array
+                    instrument_settings = [float(ms2_info[col]) for col in instrument_settings_cols if col in ms2_info]
+                    # Apply feature scaling
+                    instrument_settings = self.scale_features(instrument_settings)
+
                     selected_mass = ms2_info.get('SelectedMass1', None)
                     label = ms2_info['label']  # Adjust if your label column has a different name
 
@@ -114,7 +177,7 @@ class SimpleMassSpecDataset(Dataset):
                         'ms2_scan_number': scan_number,
                         'mz_array': current_ms1_data['mz_array'],
                         'intensity_array': current_ms1_data['intensity_array'],
-                        # 'instrument_settings': instrument_settings,
+                        'instrument_settings': instrument_settings,
                         'precursor_mz': selected_mass,
                         'label': label
                     })

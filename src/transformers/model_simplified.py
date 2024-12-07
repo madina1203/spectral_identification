@@ -13,7 +13,7 @@ class MyModel(SpectrumTransformerEncoder):
         """Add parameters for the global token hook."""
         super().__init__(*args, **kwargs)
         self.precursor_mz_encoder = FloatEncoder(self.d_model)
-        # self.apply(self.init_weights)
+        self.apply(self.init_weights)
     def global_token_hook(self, mz_array, intensity_array, precursor_mz=None, *args, **kwargs):
         """Return a simple representation of the precursor."""
         if precursor_mz is None:
@@ -35,17 +35,17 @@ class MyModel(SpectrumTransformerEncoder):
             # Now mz_rep should have shape (batch_size, d_model)
         return mz_rep  # Remove batch dimension and return
 
-    # def init_weights(self, module):
-    #     """Custom weight initialization logic."""
-    #     if isinstance(module, nn.Linear):  # Initialize Linear layers
-    #         nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
-    #         if module.bias is not None:
-    #             nn.init.zeros_(module.bias)
-    #     elif isinstance(module, nn.LayerNorm):  # Initialize LayerNorm layers
-    #         nn.init.ones_(module.weight)
-    #         nn.init.zeros_(module.bias)
-    #     elif isinstance(module, nn.Embedding):  # Initialize embeddings if used
-    #         nn.init.normal_(module.weight, mean=0, std=1)
+    def init_weights(self, module):
+        """Custom weight initialization logic."""
+        if isinstance(module, nn.Linear):  # Initialize Linear layers
+            nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):  # Initialize LayerNorm layers
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):  # Initialize embeddings if used
+            nn.init.normal_(module.weight, mean=0, std=1)
 
 
 class SimpleSpectraTransformer(pl.LightningModule):
@@ -72,9 +72,14 @@ class SimpleSpectraTransformer(pl.LightningModule):
             dropout=dropout,
 
         )
-
+        #adding complexity by 1 linear layer
+        self.fc_instrument_1 = nn.Linear(26, d_model)
+        # self.fc_instrument_2 = nn.Linear(d_model, d_model)
         # Fully connected layers for binary classification
+        self.fc_combined = nn.Linear(2 * d_model, d_model)
         self.fc_output = nn.Linear(d_model, 1)
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()  # Binary classification
 
         class_weights = torch.tensor([1 - 0.17, 0.17], dtype=torch.float32)  # Adjust weights based on proportions
 
@@ -91,14 +96,14 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.val_f1 = BinaryF1Score()
         self.val_recall = BinaryRecall()
         # Apply He initialization to all relevant layers
-        # self.apply(self.init_weights)
+        self.apply(self.init_weights)
 
-    # def init_weights(self, module):
-    #     """Apply He initialization to layers."""
-    #     if isinstance(module, nn.Linear):
-    #         nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
-    #         if module.bias is not None:
-    #             nn.init.zeros_(module.bias)
+    def init_weights(self, module):
+        """Apply He initialization to layers."""
+        if isinstance(module, nn.Linear):
+            nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
     def forward(self, batch):
         """Forward pass through the transformer and classification layers."""
         # Spectra data (m/z and intensity) processing with SpectrumTransformerEncoder
@@ -109,10 +114,20 @@ class SimpleSpectraTransformer(pl.LightningModule):
         # Forward pass through DepthCharge Transformer for spectra
         spectra_emb, _ = self.spectrum_encoder(mz_array, intensity_array, precursor_mz=precursor_mz)
         spectra_emb = spectra_emb[:, 0, :]  # Get the global embedding (first token)
+        # Instrument settings data processing with fully connected layers simple version
+        instrument_settings = batch["instrument_settings"].float()  # Shape: (batch_size, 27)
+        instrument_emb = self.fc_instrument_1(instrument_settings)
+        instrument_emb = self.relu(instrument_emb)
+        # instrument_emb = self.fc_instrument_2(instrument_emb)
+        # instrument_emb = self.relu(instrument_emb)
+        # Combine embeddings from spectra and instrument settings
+        combined_emb = torch.cat((spectra_emb, instrument_emb), dim=-1)
+        combined_emb=self.fc_combined(combined_emb)
+        combined_emb = self.relu(combined_emb)
 
         # Classification layers
-        output = self.fc_output(spectra_emb)
-
+        # output = self.fc_output(spectra_emb)
+        output = self.fc_output(combined_emb)
         return output
 
     def step(self, batch):
