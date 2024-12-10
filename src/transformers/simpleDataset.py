@@ -4,7 +4,7 @@ import pandas as pd
 import re
 import numpy as np
 import spectrum_utils.spectrum as sus
-
+import random
 class SimpleMassSpecDataset(Dataset):
     def __init__(self, mzml_file, csv_file, scaling="standardize"):
         """
@@ -18,7 +18,7 @@ class SimpleMassSpecDataset(Dataset):
         #adding feature scaling
         self.scaling = scaling
         self.feature_stats = None  # To store mean and std for standardization
-        self.excluded_columns = {"Scan", "Polarity"}  # Columns to exclude from scaling
+        self.excluded_columns = {"Scan"}  # Columns to exclude from scaling
 
         # Load scans and MS2 data
         self.scan_list = self.load_scans()
@@ -26,7 +26,7 @@ class SimpleMassSpecDataset(Dataset):
 
         # Compute statistics (mean and std) for instrument settings
         if self.scaling == "standardize":
-            self.compute_stats()
+             self.compute_stats()
 
         # Align MS2 scans with their preceding processed MS1 scans
         self.data_pairs = self.align_scans()
@@ -84,12 +84,12 @@ class SimpleMassSpecDataset(Dataset):
         return ms2_df
 
     def get_instrument_settings_columns(self):
-        return ["Scan", "MSOrder", "Polarity", "RT [min]", "LowMass", "HighMass",
+        return ["Scan", "RT [min]", "LowMass", "HighMass",
                 "TIC", "BasePeakPosition", "BasePeakIntensity", "Charge State",
-                "Monoisotopic M/Z", "Ion Injection Time (ms)", "MS2 Isolation Width",
+                "Monoisotopic M/Z", "Ion Injection Time (ms)",
                 "Conversion Parameter C", "LM Search Window (ppm)", "Number of LM Found",
-                "Mild Trapping Mode", "Source CID eV", "Activation1",
-                "Energy1", "Orbitrap Resolution", "AGC Target", "HCD Energy V(1)", "HCD Energy V(2)",
+                "Mild Trapping Mode",
+                "Energy1", "Orbitrap Resolution", "HCD Energy V(1)", "HCD Energy V(2)",
                 "HCD Energy V(3)", "Number of Lock Masses", "LM m/z-Correction (ppm)"]
 
     def compute_stats(self):
@@ -122,7 +122,7 @@ class SimpleMassSpecDataset(Dataset):
         """
         scaled_settings = []
         stats_index = 0  # Index for stats, skips excluded columns
-
+        print(instrument_settings)
         # Iterate over instrument settings
         for col_index, value in enumerate(instrument_settings):
             # Check if the current column is excluded or should not be scaled
@@ -134,8 +134,11 @@ class SimpleMassSpecDataset(Dataset):
                 mean_val = self.feature_stats[stats_index]["mean"]
                 std_val = self.feature_stats[stats_index]["std"]
                 scaled_value = (value - mean_val) / std_val if std_val > 0 else 0
+                print(scaled_value)
                 scaled_settings.append(scaled_value)
                 stats_index += 1  # Increment stats_index only for scaled columns
+        print(self.feature_stats)
+        print(instrument_settings)
 
         return np.array(scaled_settings, dtype=np.float32)
 
@@ -167,7 +170,7 @@ class SimpleMassSpecDataset(Dataset):
                     instrument_settings = [float(ms2_info[col]) for col in instrument_settings_cols if col in ms2_info]
                     # Apply feature scaling
                     instrument_settings = self.scale_features(instrument_settings)
-
+                    instrument_settings = np.array(instrument_settings, dtype=float)  # Convert to NumPy array
                     selected_mass = ms2_info.get('SelectedMass1', None)
                     label = ms2_info['label']  # Adjust if your label column has a different name
 
@@ -184,6 +187,18 @@ class SimpleMassSpecDataset(Dataset):
                 else:
                     continue  # Skip if MS2 scan is not in CSV or no preceding MS1 data
 
+            # Subsampling logic
+        # labels = [pair['label'] for pair in data_pairs]
+        # majority_class = 0 if labels.count(0) > labels.count(1) else 1
+        # minority_class = 1 - majority_class
+        # majority_samples = [pair for pair in data_pairs if pair['label'] == majority_class]
+        # minority_samples = [pair for pair in data_pairs if pair['label'] == minority_class]
+        # # Subsample majority class
+        # subsampled_majority_samples = random.sample(majority_samples, len(minority_samples))
+        #
+        # # Combine subsampled majority and all minority samples
+        # balanced_data_pairs = subsampled_majority_samples + minority_samples
+        # random.shuffle(balanced_data_pairs)  # Shuffle to mix the classes
         return data_pairs
 
     def __len__(self):

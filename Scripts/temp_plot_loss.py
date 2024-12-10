@@ -3,10 +3,10 @@ import matplotlib.pyplot as plt
 
 # List of CSV files and corresponding labels for the plot
 csv_files = [
-    'csv_logs/spectra_transformer_experiment/version_25/metrics.csv',
+    'csv_logs/spectra_transformer_experiment/version_81/metrics.csv',
 
 ]
-labels = ['Version 25']
+labels = ['Version 81']
 
 # Initialize dictionaries to store metrics from all versions
 metrics_dict = {
@@ -16,7 +16,10 @@ metrics_dict = {
     'train_f1': [],
     'val_f1': [],
     'train_recall': [],
-    'val_recall': []
+    'val_recall': [],
+    'train_precision': [],
+    'val_precision': []
+
 }
 
 # Load data from each CSV file
@@ -31,13 +34,15 @@ for csv_file, label in zip(csv_files, labels):
     metrics_dict['val_f1'].append((metrics[metrics['val_f1'].notnull()], label))
     metrics_dict['train_recall'].append((metrics[metrics['train_recall'].notnull()], label))
     metrics_dict['val_recall'].append((metrics[metrics['val_recall'].notnull()], label))
+    metrics_dict['train_precision'].append((metrics[metrics['train_precision'].notnull()], label))
+    metrics_dict['val_precision'].append((metrics[metrics['val_precision'].notnull()], label))
 
 # Plot Training and Validation Loss
 plt.figure(figsize=(10, 5))
 for data, label in metrics_dict['train_loss']:
-    plt.plot(data['epoch'], data['train_loss'], marker='o', label=f'{label} - Train Loss')
+    plt.plot(data['epoch'][10:], data['train_loss'][10:50], marker='o', label=f'{label} - Train Loss')
 for data, label in metrics_dict['val_loss']:
-    plt.plot(data['epoch'], data['val_loss'], marker='o', linestyle='--', label=f'{label} - Val Loss')
+    plt.plot(data['epoch'][10:50], data['val_loss'][10:50], marker='o', linestyle='--', label=f'{label} - Val Loss')
 
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
@@ -80,6 +85,20 @@ for data, label in metrics_dict['val_recall']:
 plt.xlabel('Epoch')
 plt.ylabel('Recall')
 plt.title('Training and Validation Recall Across Versions')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Plot Training and Validation Precision
+plt.figure(figsize=(10, 5))
+for data, label in metrics_dict['train_precision']:
+    plt.plot(data['epoch'], data['train_precision'], marker='o', label=f'{label} - Train Precision')
+for data, label in metrics_dict['val_precision']:
+    plt.plot(data['epoch'], data['val_precision'], marker='o', linestyle='--', label=f'{label} - Val Precision')
+
+plt.xlabel('Epoch')
+plt.ylabel('Precision')
+plt.title('Training and Validation Precision Across Versions')
 plt.legend()
 plt.grid(True)
 plt.show()

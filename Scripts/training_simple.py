@@ -51,11 +51,11 @@ def collate_fn(batch):
 if __name__ == '__main__':
     csv_logger = CSVLogger("csv_logs", name="spectra_transformer_experiment")
     mzml_files = [
-        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000095364/raw/preserv_etoh_blank_ID_05.mzML',
+        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000087935/POS_MSMS_raw/DOM_Interlab-LCMS_Lab26_A_Pos_MS2_rep2.mzML',
         '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000095364/raw/QCmix.mzML'
     ]
     csv_files = [
-        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000095364/raw/preserv_etoh_blank_ID_05_processed_annotated.csv',
+        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000087935/POS_MSMS_raw/DOM_Interlab-LCMS_Lab26_A_Pos_MS2_rep2_processed_annotated.csv',
         '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000095364/raw/QCmix_processed_annotated.csv'
     ]
 
@@ -65,7 +65,7 @@ if __name__ == '__main__':
     labels = np.array(labels, dtype=np.int64)
 
     for i, sample in enumerate(combined_dataset):
-        print(f"Sample {i}: {sample}")
+        # print(f"Sample {i}: {sample}")
         if 'mz_array' not in sample or 'intensity_array' not in sample or 'label' not in sample:
             print(f"Missing keys in sample {i}")
     # stratified_split = StratifiedShuffleSplit(n_splits=1, test_size=0.30, random_state=SEED)
@@ -108,7 +108,7 @@ if __name__ == '__main__':
         collate_fn=collate_fn,
         persistent_workers=True
     )
-    # print(f"Number of samples in the full dataset: {len(combined_dataset)}")
+    print(f"Number of samples in the full dataset: {len(combined_dataset)}")
     # print(f"Number of training samples: {len(train_indices)}")
     # print(f"Number of validation samples: {len(val_indices)}")
 

@@ -21,16 +21,16 @@ class MyModel(SpectrumTransformerEncoder):
 
             # Ensure precursor_mz has shape (batch_size, 1)
         precursor_mz = precursor_mz.type_as(mz_array).view(-1, 1)
-        print(f"precursor_mz shape: {precursor_mz.shape}")  # Debug statement
+        # print(f"precursor_mz shape: {precursor_mz.shape}")  # Debug statement
 
             # Encode the precursor m/z
         mz_rep = self.precursor_mz_encoder(precursor_mz)
-        print(f"mz_rep shape before squeeze: {mz_rep.shape}")  # Debug statement
+        # print(f"mz_rep shape before squeeze: {mz_rep.shape}")  # Debug statement
 
             # Squeeze the sequence length dimension if necessary
         if mz_rep.dim() == 3 and mz_rep.shape[1] == 1:
             mz_rep = mz_rep.squeeze(1)
-            print(f"mz_rep shape after squeeze: {mz_rep.shape}")  # Debug statement
+            # print(f"mz_rep shape after squeeze: {mz_rep.shape}")  # Debug statement
 
             # Now mz_rep should have shape (batch_size, d_model)
         return mz_rep  # Remove batch dimension and return
@@ -73,7 +73,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
         )
         #adding complexity by 1 linear layer
-        self.fc_instrument_1 = nn.Linear(26, d_model)
+        self.fc_instrument_1 = nn.Linear(20, d_model)
         # self.fc_instrument_2 = nn.Linear(d_model, d_model)
         # Fully connected layers for binary classification
         self.fc_combined = nn.Linear(2 * d_model, d_model)
@@ -116,15 +116,25 @@ class SimpleSpectraTransformer(pl.LightningModule):
         spectra_emb = spectra_emb[:, 0, :]  # Get the global embedding (first token)
         # Instrument settings data processing with fully connected layers simple version
         instrument_settings = batch["instrument_settings"].float()  # Shape: (batch_size, 27)
+        print("First 10 instrument settings:", instrument_settings[1, :10])
+        print("Last 10 instrument settings:", instrument_settings[1, -10:])
+
         instrument_emb = self.fc_instrument_1(instrument_settings)
         instrument_emb = self.relu(instrument_emb)
+
+
+        # Add debug statements to check the magnitude of embeddings
+        print("Spectra embedding magnitude:", spectra_emb.abs().mean().item())
+        print("Instrument embedding magnitude:", instrument_emb.abs().mean().item())
         # instrument_emb = self.fc_instrument_2(instrument_emb)
         # instrument_emb = self.relu(instrument_emb)
         # Combine embeddings from spectra and instrument settings
         combined_emb = torch.cat((spectra_emb, instrument_emb), dim=-1)
+        print(combined_emb[0,:10])
+        print(combined_emb[0,-10:])
         combined_emb=self.fc_combined(combined_emb)
         combined_emb = self.relu(combined_emb)
-
+        # quit()
         # Classification layers
         # output = self.fc_output(spectra_emb)
         output = self.fc_output(combined_emb)
@@ -205,5 +215,15 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
     def configure_optimizers(self):
         """Configure optimizer for training."""
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        # optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        # trying different optimizers
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": self.spectrum_encoder.parameters(), "lr": 0.0001},  # Transformer part
+                {"params": self.fc_output.parameters(), "lr": 0.0001},  # Linear layer
+                {"params": self.fc_combined.parameters(), "lr": 0.001},  # Another linear layer
+                {"params": self.fc_instrument_1.parameters(), "lr": 0.001}
+            ]
+
+        )
         return optimizer
