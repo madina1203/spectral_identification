@@ -52,11 +52,16 @@ if __name__ == '__main__':
     csv_logger = CSVLogger("csv_logs", name="spectra_transformer_experiment")
     mzml_files = [
         '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000087935/POS_MSMS_raw/DOM_Interlab-LCMS_Lab26_A_Pos_MS2_rep2.mzML',
-        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000095364/raw/QCmix.mzML'
+        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000095364/raw/QCmix.mzML',
+        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000088226/Fraction-6-4.mzML'
+
     ]
+
+
     csv_files = [
         '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000087935/POS_MSMS_raw/DOM_Interlab-LCMS_Lab26_A_Pos_MS2_rep2_processed_annotated.csv',
-        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000095364/raw/QCmix_processed_annotated.csv'
+        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000095364/raw/QCmix_processed_annotated.csv',
+        '/Users/madinabekbergenova/Desktop/phd_data/methods_by_orbitraps/Exploris/MSV_Files/MSV000088226/Fraction-6-4_processed_annotated.csv'
     ]
 
     datasets = [SimpleMassSpecDataset(mzml, csv) for mzml, csv in zip(mzml_files, csv_files)]

@@ -135,6 +135,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
         combined_emb=self.fc_combined(combined_emb)
         combined_emb = self.relu(combined_emb)
         # quit()
+
         # Classification layers
         # output = self.fc_output(spectra_emb)
         output = self.fc_output(combined_emb)
@@ -219,10 +220,10 @@ class SimpleSpectraTransformer(pl.LightningModule):
         # trying different optimizers
         optimizer = torch.optim.AdamW(
             [
-                {"params": self.spectrum_encoder.parameters(), "lr": 0.0001},  # Transformer part
-                {"params": self.fc_output.parameters(), "lr": 0.0001},  # Linear layer
-                {"params": self.fc_combined.parameters(), "lr": 0.001},  # Another linear layer
-                {"params": self.fc_instrument_1.parameters(), "lr": 0.001}
+                {"params": self.spectrum_encoder.parameters(), "lr": 0.0001, "weight_decay": 0.01},  # Transformer part
+                {"params": self.fc_output.parameters(), "lr": 0.0001, "weight_decay": 0.01},  # Linear layer
+                {"params": self.fc_combined.parameters(), "lr": 0.001, "weight_decay": 0.01},  # Another linear layer
+                {"params": self.fc_instrument_1.parameters(), "lr": 0.001, "weight_decay": 0.01}
             ]
 
         )
