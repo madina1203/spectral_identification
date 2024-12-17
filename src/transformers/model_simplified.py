@@ -74,14 +74,14 @@ class SimpleSpectraTransformer(pl.LightningModule):
         )
         #adding complexity by 1 linear layer
         self.fc_instrument_1 = nn.Linear(20, d_model)
-        # self.fc_instrument_2 = nn.Linear(d_model, d_model)
+        self.fc_instrument_2 = nn.Linear(d_model, d_model)
         # Fully connected layers for binary classification
         self.fc_combined = nn.Linear(2 * d_model, d_model)
         self.fc_output = nn.Linear(d_model, 1)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()  # Binary classification
 
-        class_weights = torch.tensor([1 - 0.17, 0.17], dtype=torch.float32)  # Adjust weights based on proportions
+        # class_weights = torch.tensor([1 - 0.17, 0.17], dtype=torch.float32)  # Adjust weights based on proportions
 
         #self.bce_loss = nn.BCEWithLogitsLoss(pos_weight=class_weights[1])
         self.bce_loss = nn.BCEWithLogitsLoss()
@@ -125,9 +125,9 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
         # Add debug statements to check the magnitude of embeddings
         print("Spectra embedding magnitude:", spectra_emb.abs().mean().item())
-        print("Instrument embedding magnitude:", instrument_emb.abs().mean().item())
-        # instrument_emb = self.fc_instrument_2(instrument_emb)
-        # instrument_emb = self.relu(instrument_emb)
+        print("Instrument embedding magnitude after the first linear layer:", instrument_emb.abs().mean().item())
+        instrument_emb = self.fc_instrument_2(instrument_emb)
+        instrument_emb = self.relu(instrument_emb)
         # Combine embeddings from spectra and instrument settings
         combined_emb = torch.cat((spectra_emb, instrument_emb), dim=-1)
         print(combined_emb[0,:10])
@@ -220,10 +220,10 @@ class SimpleSpectraTransformer(pl.LightningModule):
         # trying different optimizers
         optimizer = torch.optim.AdamW(
             [
-                {"params": self.spectrum_encoder.parameters(), "lr": 0.0001, "weight_decay": 0.01},  # Transformer part
-                {"params": self.fc_output.parameters(), "lr": 0.0001, "weight_decay": 0.01},  # Linear layer
-                {"params": self.fc_combined.parameters(), "lr": 0.001, "weight_decay": 0.01},  # Another linear layer
-                {"params": self.fc_instrument_1.parameters(), "lr": 0.001, "weight_decay": 0.01}
+                {"params": self.spectrum_encoder.parameters(), "lr": 0.0001, "weight_decay": 0.001},  # Transformer part
+                {"params": self.fc_output.parameters(), "lr": 0.0001, "weight_decay": 0.001},  # Linear layer
+                {"params": self.fc_combined.parameters(), "lr": 0.001, "weight_decay": 0.001},  # Another linear layer
+                {"params": self.fc_instrument_1.parameters(), "lr": 0.001, "weight_decay": 0.001}
             ]
 
         )
