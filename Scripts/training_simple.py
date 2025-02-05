@@ -1,6 +1,8 @@
 import os
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+import sys
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 import torch  # Import PyTorch
 import torch.nn as nn  # Import PyTorch's neural network module
 import torch.nn.functional as F  # Import PyTorch's functional module
@@ -124,6 +126,6 @@ if __name__ == '__main__':
         lr=0.0001
     )
 
-    trainer = pl.Trainer(max_epochs=50, logger=csv_logger, log_every_n_steps=10  # Log every 10 steps, or set to 1 for every batch
+    trainer = pl.Trainer(max_epochs=5, logger=csv_logger, log_every_n_steps=10  # Log every 10 steps, or set to 1 for every batch
 )
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)

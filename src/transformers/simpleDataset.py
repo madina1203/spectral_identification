@@ -122,7 +122,7 @@ class SimpleMassSpecDataset(Dataset):
         """
         scaled_settings = []
         stats_index = 0  # Index for stats, skips excluded columns
-        print(instrument_settings)
+        #print(instrument_settings)
         # Iterate over instrument settings
         for col_index, value in enumerate(instrument_settings):
             # Check if the current column is excluded or should not be scaled
@@ -134,11 +134,11 @@ class SimpleMassSpecDataset(Dataset):
                 mean_val = self.feature_stats[stats_index]["mean"]
                 std_val = self.feature_stats[stats_index]["std"]
                 scaled_value = (value - mean_val) / std_val if std_val > 0 else 0
-                print(scaled_value)
+                #print(scaled_value)
                 scaled_settings.append(scaled_value)
                 stats_index += 1  # Increment stats_index only for scaled columns
-        print(self.feature_stats)
-        print(instrument_settings)
+        #print(self.feature_stats)
+        #print(instrument_settings)
 
         return np.array(scaled_settings, dtype=np.float32)
 

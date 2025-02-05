@@ -56,14 +56,32 @@ class SimpleSpectraTransformer(pl.LightningModule):
             d_model,
             n_layers,
             dropout=0.1,
-            lr=0.001
+            lr=0.001,
+            #  New or extended hyperparameters:
+            hidden_fc1: int = 128,
+            encoder_lr: float = 1e-4,
+            linear_lr: float = 1e-3,
+            weight_decay: float = 1e-3,
+            optimizer_name: str = "AdamW",
     ):
         """Initialize the model with transformer for spectra only."""
         super().__init__()
+        lr = float(lr)
+        encoder_lr = float(encoder_lr)
+        linear_lr = float(linear_lr)
+        weight_decay = float(weight_decay)
+        self.save_hyperparameters()
         self.d_model = d_model
         self.n_layers = n_layers
         self.lr = lr
+        self.dropout = dropout
 
+        # Additional hyperparameters
+        self.hidden_fc1 = hidden_fc1
+        self.encoder_lr = encoder_lr
+        self.linear_lr = linear_lr
+        self.weight_decay = weight_decay
+        self.optimizer_name = optimizer_name
 
         # Transformer encoder for spectra data from DepthCharge
         self.spectrum_encoder = MyModel(
@@ -73,8 +91,8 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
         )
         #adding complexity by 1 linear layer
-        self.fc_instrument_1 = nn.Linear(20, d_model)
-        self.fc_instrument_2 = nn.Linear(d_model, d_model)
+        self.fc_instrument_1 = nn.Linear(20, hidden_fc1)
+        self.fc_instrument_2 = nn.Linear(hidden_fc1, d_model)
         # Fully connected layers for binary classification
         self.fc_combined = nn.Linear(2 * d_model, d_model)
         self.fc_output = nn.Linear(d_model, 1)
@@ -116,22 +134,22 @@ class SimpleSpectraTransformer(pl.LightningModule):
         spectra_emb = spectra_emb[:, 0, :]  # Get the global embedding (first token)
         # Instrument settings data processing with fully connected layers simple version
         instrument_settings = batch["instrument_settings"].float()  # Shape: (batch_size, 27)
-        print("First 10 instrument settings:", instrument_settings[1, :10])
-        print("Last 10 instrument settings:", instrument_settings[1, -10:])
+        # print("First 10 instrument settings:", instrument_settings[1, :10])
+        # print("Last 10 instrument settings:", instrument_settings[1, -10:])
 
         instrument_emb = self.fc_instrument_1(instrument_settings)
         instrument_emb = self.relu(instrument_emb)
 
 
         # Add debug statements to check the magnitude of embeddings
-        print("Spectra embedding magnitude:", spectra_emb.abs().mean().item())
-        print("Instrument embedding magnitude after the first linear layer:", instrument_emb.abs().mean().item())
+        # print("Spectra embedding magnitude:", spectra_emb.abs().mean().item())
+        # print("Instrument embedding magnitude after the first linear layer:", instrument_emb.abs().mean().item())
         instrument_emb = self.fc_instrument_2(instrument_emb)
         instrument_emb = self.relu(instrument_emb)
         # Combine embeddings from spectra and instrument settings
         combined_emb = torch.cat((spectra_emb, instrument_emb), dim=-1)
-        print(combined_emb[0,:10])
-        print(combined_emb[0,-10:])
+        # print(combined_emb[0,:10])
+        # print(combined_emb[0,-10:])
         combined_emb=self.fc_combined(combined_emb)
         combined_emb = self.relu(combined_emb)
         # quit()
@@ -214,17 +232,60 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.val_f1.reset()
         self.val_recall.reset()
 
-    def configure_optimizers(self):
-        """Configure optimizer for training."""
-        # optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        # trying different optimizers
-        optimizer = torch.optim.AdamW(
-            [
-                {"params": self.spectrum_encoder.parameters(), "lr": 0.0001, "weight_decay": 0.001},  # Transformer part
-                {"params": self.fc_output.parameters(), "lr": 0.0001, "weight_decay": 0.001},  # Linear layer
-                {"params": self.fc_combined.parameters(), "lr": 0.001, "weight_decay": 0.001},  # Another linear layer
-                {"params": self.fc_instrument_1.parameters(), "lr": 0.001, "weight_decay": 0.001}
-            ]
+    # def configure_optimizers(self):
+    #     """Configure optimizer for training."""
+    #     # optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+    #     # trying different optimizers
+    #     optimizer = torch.optim.AdamW(
+    #         [
+    #             {"params": self.spectrum_encoder.parameters(), "lr": 0.0001, "weight_decay": 0.001},  # Transformer part
+    #             {"params": self.fc_output.parameters(), "lr": 0.0001, "weight_decay": 0.001},  # Linear layer
+    #             {"params": self.fc_combined.parameters(), "lr": 0.001, "weight_decay": 0.001},  # Another linear layer
+    #             {"params": self.fc_instrument_1.parameters(), "lr": 0.001, "weight_decay": 0.001}
+    #         ]
+    #
+    #     )
+    #     return optimizer
 
-        )
+
+#updated function
+    def configure_optimizers(self):
+        """Configure optimizer for training,
+        using separate LR for spectrum encoder vs linear layers."""
+        # 1) Group parameters
+        param_groups = [
+            {
+                "params": self.spectrum_encoder.parameters(),
+                "lr": self.encoder_lr,
+                "weight_decay": self.weight_decay,
+            },
+            {
+                "params": self.fc_output.parameters(),
+                "lr": self.linear_lr,
+                "weight_decay": self.weight_decay,
+            },
+            {
+                "params": self.fc_combined.parameters(),
+                "lr": self.linear_lr,
+                "weight_decay": self.weight_decay,
+            },
+            {
+                "params": self.fc_instrument_1.parameters(),
+                "lr": self.linear_lr,
+                "weight_decay": self.weight_decay,
+            },
+            {
+                "params": self.fc_instrument_2.parameters(),
+                "lr": self.linear_lr,
+                "weight_decay": self.weight_decay,
+            },
+        ]
+
+        # 2) Choose optimizer
+        if self.optimizer_name.lower() == "adam":
+            optimizer = torch.optim.Adam(param_groups)
+        else:
+            # Default
+            optimizer = torch.optim.AdamW(param_groups)
+
         return optimizer
