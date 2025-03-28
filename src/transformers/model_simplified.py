@@ -59,6 +59,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
             lr=0.001,
             #  New or extended hyperparameters:
             hidden_fc1: int = 128,
+            instrument_embedding_dim: int = 32,
             encoder_lr: float = 1e-4,
             linear_lr: float = 1e-3,
             weight_decay: float = 1e-3,
@@ -78,6 +79,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
         # Additional hyperparameters
         self.hidden_fc1 = hidden_fc1
+        self.instrument_embedding_dim = instrument_embedding_dim
         self.encoder_lr = encoder_lr
         self.linear_lr = linear_lr
         self.weight_decay = weight_decay
@@ -92,9 +94,9 @@ class SimpleSpectraTransformer(pl.LightningModule):
         )
         #adding complexity by 1 linear layer
         self.fc_instrument_1 = nn.Linear(20, hidden_fc1)
-        self.fc_instrument_2 = nn.Linear(hidden_fc1, d_model)
+        self.fc_instrument_2 = nn.Linear(hidden_fc1, instrument_embedding_dim)
         # Fully connected layers for binary classification
-        self.fc_combined = nn.Linear(2 * d_model, d_model)
+        self.fc_combined = nn.Linear(d_model+instrument_embedding_dim, d_model)
         self.fc_output = nn.Linear(d_model, 1)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()  # Binary classification
@@ -124,16 +126,20 @@ class SimpleSpectraTransformer(pl.LightningModule):
                 nn.init.zeros_(module.bias)
     def forward(self, batch):
         """Forward pass through the transformer and classification layers."""
+        # Move all relevant batch data to the same device as the model
+        device = next(self.parameters()).device
+        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        print(f"Batch tensors are on: {batch['mz'].device}")
         # Spectra data (m/z and intensity) processing with SpectrumTransformerEncoder
-        mz_array = batch["mz"].float()
-        intensity_array = batch["intensity"].float()
-        precursor_mz = batch["precursor_mz"].float()  # Get precursor m/z from the batch
+        mz_array = batch["mz"]
+        intensity_array = batch["intensity"]
+        precursor_mz = batch["precursor_mz"]  # Get precursor m/z from the batch
 
         # Forward pass through DepthCharge Transformer for spectra
         spectra_emb, _ = self.spectrum_encoder(mz_array, intensity_array, precursor_mz=precursor_mz)
         spectra_emb = spectra_emb[:, 0, :]  # Get the global embedding (first token)
         # Instrument settings data processing with fully connected layers simple version
-        instrument_settings = batch["instrument_settings"].float()  # Shape: (batch_size, 27)
+        instrument_settings = batch["instrument_settings"]  # Shape: (batch_size, 27)
         # print("First 10 instrument settings:", instrument_settings[1, :10])
         # print("Last 10 instrument settings:", instrument_settings[1, -10:])
 
