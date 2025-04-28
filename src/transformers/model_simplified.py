@@ -58,8 +58,8 @@ class SimpleSpectraTransformer(pl.LightningModule):
             dropout=0.1,
             lr=0.001,
             #  New or extended hyperparameters:
-            hidden_fc1: int = 128,
-            instrument_embedding_dim: int = 32,
+            hidden_fc1: int = 16,
+            instrument_embedding_dim: int = 16,
             encoder_lr: float = 1e-4,
             linear_lr: float = 1e-3,
             weight_decay: float = 1e-3,
@@ -75,7 +75,6 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.d_model = d_model
         self.n_layers = n_layers
         self.lr = lr
-        self.dropout = dropout
 
         # Additional hyperparameters
         self.hidden_fc1 = hidden_fc1
@@ -84,7 +83,6 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.linear_lr = linear_lr
         self.weight_decay = weight_decay
         self.optimizer_name = optimizer_name
-
         # Transformer encoder for spectra data from DepthCharge
         self.spectrum_encoder = MyModel(
             d_model=d_model,
@@ -96,7 +94,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.fc_instrument_1 = nn.Linear(20, hidden_fc1)
         self.fc_instrument_2 = nn.Linear(hidden_fc1, instrument_embedding_dim)
         # Fully connected layers for binary classification
-        self.fc_combined = nn.Linear(d_model+instrument_embedding_dim, d_model)
+        self.fc_combined = nn.Linear(d_model + instrument_embedding_dim, d_model)
         self.fc_output = nn.Linear(d_model, 1)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()  # Binary classification
@@ -117,6 +115,15 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.val_recall = BinaryRecall()
         # Apply He initialization to all relevant layers
         self.apply(self.init_weights)
+        if torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+        else:
+            rank = 0
+
+        # print(f"[rank {rank}] model spec: "
+        #       f"d_model={d_model}  hidden_fc1={hidden_fc1}  "
+        #       f"n_layers={n_layers}  max_seq_len={getattr(self, 'max_len', 'N/A')}",
+        #       flush=True)
 
     def init_weights(self, module):
         """Apply He initialization to layers."""
@@ -126,20 +133,16 @@ class SimpleSpectraTransformer(pl.LightningModule):
                 nn.init.zeros_(module.bias)
     def forward(self, batch):
         """Forward pass through the transformer and classification layers."""
-        # Move all relevant batch data to the same device as the model
-        device = next(self.parameters()).device
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        print(f"Batch tensors are on: {batch['mz'].device}")
         # Spectra data (m/z and intensity) processing with SpectrumTransformerEncoder
-        mz_array = batch["mz"]
-        intensity_array = batch["intensity"]
-        precursor_mz = batch["precursor_mz"]  # Get precursor m/z from the batch
+        mz_array = batch["mz"].float()
+        intensity_array = batch["intensity"].float()
+        precursor_mz = batch["precursor_mz"].float()  # Get precursor m/z from the batch
 
         # Forward pass through DepthCharge Transformer for spectra
         spectra_emb, _ = self.spectrum_encoder(mz_array, intensity_array, precursor_mz=precursor_mz)
         spectra_emb = spectra_emb[:, 0, :]  # Get the global embedding (first token)
         # Instrument settings data processing with fully connected layers simple version
-        instrument_settings = batch["instrument_settings"]  # Shape: (batch_size, 27)
+        instrument_settings = batch["instrument_settings"].float()  # Shape: (batch_size, 27)
         # print("First 10 instrument settings:", instrument_settings[1, :10])
         # print("Last 10 instrument settings:", instrument_settings[1, -10:])
 
@@ -253,8 +256,6 @@ class SimpleSpectraTransformer(pl.LightningModule):
     #     )
     #     return optimizer
 
-
-#updated function
     def configure_optimizers(self):
         """Configure optimizer for training,
         using separate LR for spectrum encoder vs linear layers."""

@@ -26,6 +26,10 @@ import time
 SEED =1
 pl.seed_everything(SEED, workers=True)
 
+import logging, torch
+from lightning.pytorch.callbacks import Callback
+
+
 # Define a custom collate function to handle variable-length sequences
 def collate_fn(batch):
     mz_arrays = [torch.tensor(item['mz_array'], dtype=torch.float32) for item in batch]
@@ -74,7 +78,7 @@ def measure_dataloader(loader, num_batches=None):
 
 
 def main(args):
-    csv_logger = CSVLogger(args.log_dir, name="spectra_transformer_experiment_22_03")
+    csv_logger = CSVLogger(args.log_dir, name="spectra_transformer_experiment_05_04")
 
     # mzml_files = args.mzml_files.split(",")
     # csv_files = args.csv_files.split(",")
@@ -121,6 +125,8 @@ def main(args):
         n_layers=args.n_layers,
         dropout=args.dropout,
         lr=args.lr,
+        encoder_lr=args.lr,
+        linear_lr=args.lr,
         instrument_embedding_dim=args.instrument_embedding_dim
     )
     # model = model.to("cuda")
@@ -150,10 +156,19 @@ def main(args):
         max_epochs=args.epochs,
         logger=csv_logger,
         log_every_n_steps=args.log_steps,
-        callbacks=[checkpoint_callback, early_stopping_callback]
+        callbacks=[checkpoint_callback, early_stopping_callback,  ]
     )
-    # Прямой вызов fit без профилировщика
+    # Wrap the training process with PyTorch's profiler
+    # with profile(
+    #         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+    #         profile_memory=True,
+    #         record_shapes=True
+    # ) as prof:
+    #     with record_function("model_training"):
+    #         trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    # #
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -162,11 +177,11 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=2048, help="Batch size")
     parser.add_argument("--val_split", type=float, default=0.3, help="Validation split")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of DataLoader workers")
-    parser.add_argument("--d_model", type=int, default=128, help="Model dimension")
-    parser.add_argument("--n_layers", type=int, default=2, help="Number of transformer layers")
-    parser.add_argument("--dropout", type=float, default=0.3, help="Dropout rate")
-    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
-    parser.add_argument("--epochs", type=int, default=50, help="Number of epochs")
+    parser.add_argument("--d_model", type=int, default=256, help="Model dimension")
+    parser.add_argument("--n_layers", type=int, default=4, help="Number of transformer layers")
+    parser.add_argument("--dropout", type=float, default=0.1468, help="Dropout rate")
+    parser.add_argument("--lr", type=float, default=0.0092249121501, help="Learning rate")
+    parser.add_argument("--epochs", type=int, default=7, help="Number of epochs")
     parser.add_argument("--log_steps", type=int, default=10, help="Log every n steps")
     parser.add_argument("--seed", type=int, default=1, help="Random seed")
     parser.add_argument("--instrument_embedding_dim", type=int, default=16, help="Dimension of the instrument embedding output")

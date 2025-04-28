@@ -4,8 +4,9 @@ import pandas as pd
 import re
 import numpy as np
 import spectrum_utils.spectrum as sus
-import time
 import random
+import torch
+
 class SimpleMassSpecDataset(Dataset):
     def __init__(self, mzml_file, csv_file, scaling="standardize"):
         """
@@ -123,7 +124,7 @@ class SimpleMassSpecDataset(Dataset):
         """
         scaled_settings = []
         stats_index = 0  # Index for stats, skips excluded columns
-        #print(instrument_settings)
+
         # Iterate over instrument settings
         for col_index, value in enumerate(instrument_settings):
             # Check if the current column is excluded or should not be scaled
@@ -135,11 +136,10 @@ class SimpleMassSpecDataset(Dataset):
                 mean_val = self.feature_stats[stats_index]["mean"]
                 std_val = self.feature_stats[stats_index]["std"]
                 scaled_value = (value - mean_val) / std_val if std_val > 0 else 0
-                #print(scaled_value)
+                # print(scaled_value)
                 scaled_settings.append(scaled_value)
                 stats_index += 1  # Increment stats_index only for scaled columns
-        #print(self.feature_stats)
-        #print(instrument_settings)
+
 
         return np.array(scaled_settings, dtype=np.float32)
 
@@ -168,17 +168,13 @@ class SimpleMassSpecDataset(Dataset):
                 # Check if the MS2 scan is in the CSV data
                 if scan_number in ms2_scan_info and current_ms1_data is not None:
                     ms2_info = ms2_scan_info[scan_number]
-                    # instrument_settings = [float(ms2_info[col]) for col in instrument_settings_cols if col in ms2_info]
-                    # # Apply feature scaling
-                    # instrument_settings = self.scale_features(instrument_settings)
-                    # instrument_settings = np.array(instrument_settings, dtype=float)  # Convert to NumPy array
-
+                    instrument_settings = [float(ms2_info[col]) for col in instrument_settings_cols if col in ms2_info]
+                    # Apply feature scaling
+                    instrument_settings = self.scale_features(instrument_settings)
+                    instrument_settings = np.array(instrument_settings, dtype=float)  # Convert to NumPy array
                     selected_mass = ms2_info.get('SelectedMass1', None)
                     label = ms2_info['label']  # Adjust if your label column has a different name
-                    instrument_settings = self.scale_features([
-                        ms2_info[col] for col in instrument_settings_cols if col in ms2_info
-                    ])
-                    instrument_settings = np.array(instrument_settings, dtype=np.float32)
+
                     # Append the data pair with preprocessed MS1 data and MS2 data
                     data_pairs.append({
                         'ms1_scan_number': current_ms1_scan_number,
@@ -210,12 +206,8 @@ class SimpleMassSpecDataset(Dataset):
         return len(self.data_pairs)
 
     def __getitem__(self, idx):
-        t0 = time.time()
-        t1 = time.time()
-        if (t1 - t0) > 0.01:  # If one sample takes more than 10 ms, log it
-            print(f"Slow __getitem__ at index {idx}: {t1 - t0:.4f} s")
         return self.data_pairs[idx]
-        
+
     @staticmethod
     def collate_fn(batch):
         """
