@@ -17,9 +17,9 @@ import argparse
 from lightning.pytorch.loggers import CSVLogger
 from lightning.pytorch.callbacks import Callback
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, auc
 from sklearn.mixture import GaussianMixture
-from scipy.stats import rankdata
+from scipy.stats import rankdata, norm # Added norm
 from src.transformers.simpleDataset import SimpleMassSpecDataset
 from src.transformers.model_simplified import SimpleSpectraTransformer
 from lightning.pytorch.strategies import DDPStrategy
@@ -67,7 +67,6 @@ class ImprovedPyTorchSklearnWrapper:
         self.force_cpu = force_cpu
         self.logger = logger
 
-        # Determine device
         if force_cpu:
             self.device = torch.device("cpu")
         elif device is None:
@@ -78,11 +77,8 @@ class ImprovedPyTorchSklearnWrapper:
             self.device = torch.device(device)
 
         print(f"Using device: {self.device}")
-
-        # Move model to the appropriate device
         self.model = self.model.to(self.device)
 
-        # Ensure all model components are on the same device
         if hasattr(self.model, 'spectrum_encoder'):
             self.model.spectrum_encoder = self.model.spectrum_encoder.to(self.device)
             if hasattr(self.model.spectrum_encoder, 'peak_encoder'):
@@ -108,27 +104,15 @@ class ImprovedPyTorchSklearnWrapper:
         all_probs = []
         with torch.no_grad():
             for batch in test_loader:
-                # Move all tensors to the model's device
                 batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-                # Ensure model is on the correct device
                 self.model = self.model.to(self.device)
-                # Forward pass
                 logits = self.model(batch)
                 probs = torch.sigmoid(logits)
-                # Move probabilities to CPU before converting to numpy
                 all_probs.append(probs.cpu().numpy())
         probs_numpy = np.vstack(all_probs)
         return np.column_stack([1 - probs_numpy, probs_numpy])
 
     def fit(self, train_indices, val_indices=None, callbacks=None):
-        """
-        Fits the model on the training data and optionally validates on validation data.
-
-        Args:
-            train_indices: Indices for training data
-            val_indices: Optional indices for validation data
-            callbacks: Optional list of PyTorch Lightning callbacks
-        """
         train_dataset = Subset(self.dataset, train_indices)
         train_loader = DataLoader(
             train_dataset,
@@ -163,7 +147,7 @@ class ImprovedPyTorchSklearnWrapper:
             accelerator='gpu',
             devices=2,
             strategy=DDPStrategy(gradient_as_bucket_view=True, static_graph=True),
-            precision='16-mixed'  # Use mixed precision for better performance
+            precision='16-mixed'
         )
         trainer.fit(self.model, train_dataloaders=train_loader, val_dataloaders=val_loader)
         self.is_fitted_ = True
@@ -183,13 +167,11 @@ class FixedHoldoutPUCallback(Callback):
         self.holdout_pos_indices = holdout_pos_indices
         self.dataset = dataset
         self.val_outputs = []
-        self.val_batch_indices = []  # Store batch indices to track which samples we have
+        self.val_batch_indices = []
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        # Store the logits from the validation step output
         if isinstance(outputs, dict) and 'logits' in outputs:
             self.val_outputs.append(outputs['logits'])
-            # Store the indices for this batch
             start_idx = batch_idx * trainer.val_dataloaders.batch_size
             end_idx = min(start_idx + trainer.val_dataloaders.batch_size, len(self.val_indices))
             self.val_batch_indices.extend(range(start_idx, end_idx))
@@ -197,7 +179,6 @@ class FixedHoldoutPUCallback(Callback):
             print("Warning: Validation step did not return logits in expected format")
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        # Estimate c using the fixed hold-out positives
         if len(self.holdout_pos_indices) == 0:
             print("Warning: No hold-out positives for c estimation.")
             estimated_c = 1.0
@@ -210,10 +191,8 @@ class FixedHoldoutPUCallback(Callback):
             elif estimated_c > 1:
                 estimated_c = 1.0
 
-        # Get validation probabilities from stored outputs
         if self.val_outputs:
             val_probs_s1 = torch.cat(self.val_outputs).sigmoid().cpu().numpy()
-            # Get true labels only for the samples we have predictions for
             val_true_labels = np.array([self.dataset[self.val_indices[i]]['label'] for i in self.val_batch_indices])
         else:
             print("Warning: No validation outputs collected, falling back to wrapper prediction")
@@ -224,15 +203,13 @@ class FixedHoldoutPUCallback(Callback):
         val_predictions_pu_adjusted = np.array([1.0 if p > 0.5 else -1.0 for p in val_probs_y1_adjusted])
         val_true_labels_pu = np.array([1.0 if label == 1 else -1.0 for label in val_true_labels])
 
-        # Calculate additional PU metrics for validation set
         val_labeled_pos_indices = np.where(val_true_labels == 1)[0]
         additional_pu_metrics = calculate_pu_metrics(
-            val_probs_y1_adjusted,
+            val_probs_y1_adjusted, # Use adjusted probabilities for PU metrics
             val_true_labels_pu,
             val_labeled_pos_indices
         )
 
-        # Combine all metrics
         metrics = {
             'pu_val_accuracy': accuracy_score(val_true_labels_pu, val_predictions_pu_adjusted),
             'pu_val_precision': precision_score(val_true_labels_pu, val_predictions_pu_adjusted, average='binary',
@@ -247,53 +224,31 @@ class FixedHoldoutPUCallback(Callback):
             'pu_val_epr': additional_pu_metrics['epr']
         }
 
-        # Log metrics
         trainer.logger.log_metrics(metrics, step=trainer.current_epoch)
-
-        # Print metrics
-        print(f"\nEpoch {trainer.current_epoch} PU Metrics (Fixed Holdout):")
+        print(f"\\nEpoch {trainer.current_epoch} PU Metrics (Fixed Holdout):")
         for name, value in metrics.items():
             print(f"  {name}: {value:.4f}")
 
-        # Clear validation outputs for next epoch
         self.val_outputs = []
         self.val_batch_indices = []
 
 
 def calculate_pu_metrics(probabilities, true_labels, labeled_pos_indices):
-    """
-    Calculate additional PU learning metrics:
-    1. AUROC using two-component Gaussian mixture model
-    2. Percentile rank of labeled positives and EPR
-
-    Args:
-        probabilities: Array of probability scores for all samples (between 0 and 1)
-        true_labels: Array of true labels (1 for positive, -1 for unlabeled)
-        labeled_pos_indices: Indices of known positive samples
-
-    Returns:
-        Dictionary containing the calculated metrics
-    """
-    print("\n--- calculate_pu_metrics --- DEBUG LOGS ---")
+    print("\n--- calculate_pu_metrics (v2 - Theoretical GMM AUROC) --- DEBUG LOGS ---")
     print(f"Input probabilities (first 10): {probabilities[:10]}")
     print(f"Input true_labels (first 10): {true_labels[:10]}")
     print(f"Input labeled_pos_indices (first 10): {labeled_pos_indices[:10]}")
     print(f"Total samples: {len(probabilities)}, Total true labels: {len(true_labels)}, Total labeled_pos: {len(labeled_pos_indices)}")
 
-
-    # Validate inputs
     if len(probabilities) != len(true_labels):
         raise ValueError(f"Length mismatch: probabilities ({len(probabilities)}) != true_labels ({len(true_labels)})")
 
-    # Convert labels to binary format (0 and 1) for metric calculations
-    binary_labels = np.array([1 if label == 1 else 0 for label in true_labels])
-    print(f"Binary labels (first 10): {binary_labels[:10]}")
+    binary_labels = np.array([1 if label == 1 else 0 for label in true_labels]) # Not used for theoretical GMM AUROC, but kept for other metrics if any
+    print(f"Binary labels (first 10, for potential other metrics): {binary_labels[:10]}")
 
-    # Validate labeled_pos_indices
     if not isinstance(labeled_pos_indices, np.ndarray):
         labeled_pos_indices = np.array(labeled_pos_indices)
 
-    # Ensure indices are within bounds
     if len(labeled_pos_indices) > 0 and np.any(labeled_pos_indices >= len(probabilities)):
         print(f"Warning: Some labeled positive indices are out of bounds. Adjusting indices...")
         original_count = len(labeled_pos_indices)
@@ -304,98 +259,126 @@ def calculate_pu_metrics(probabilities, true_labels, labeled_pos_indices):
     epr_val = 0.0
     auroc_gmm_val = 0.5 # Default value
 
-    if len(labeled_pos_indices) == 0:
-        print("Warning: No valid labeled positive indices found after validation. Returning default metrics.")
-        return {
-            'auroc_gmm': 0.5,
-            'auprc': 0.0,
-            'epr': 0.0
-        }
+    # GMM-based AUROC (theoretical calculation based on R code)
+    print("\n-- GMM AUROC Calculation (Theoretical) --")
+    if len(probabilities) < 2:
+        print("Warning: Not enough samples for GMM fitting (<2). Returning default AUROC GMM.")
+    else:
+        X = probabilities.reshape(-1, 1)
+        try:
+            gmm = GaussianMixture(n_components=2, random_state=SEED, reg_covar=1e-6)
+            gmm.fit(X)
 
-    # 1. Two-component Gaussian mixture model for AUROC
-    print("\n-- GMM AUROC Calculation --")
-    X = probabilities.reshape(-1, 1)
+            means = gmm.means_.flatten()
+            variances = gmm.covariances_.flatten()
+            stds = np.sqrt(np.maximum(variances, 1e-12)) # Ensure stds are non-negative and non-zero
+            weights = gmm.weights_.flatten()
+            print(f"GMM Means: {means}")
+            print(f"GMM Std Devs (sqrt of max(variances, 1e-12)): {stds}")
+            print(f"GMM Weights: {weights}")
 
-    try:
-        gmm = GaussianMixture(n_components=2, random_state=SEED, reg_covar=1e-6) # Added reg_covar for stability
-        gmm.fit(X)
+            # Ensure component 0 is "negative" (lower mean) and component 1 is "positive" (higher mean)
+            if means[0] > means[1]:
+                means = means[::-1]
+                stds = stds[::-1]
+                weights = weights[::-1]
+                print("GMM components swapped to ensure mean[0] < mean[1]")
+            
+            mean_neg, std_neg = means[0], stds[0]
+            mean_pos, std_pos = means[1], stds[1]
+            print(f"Negative Component: Mean={mean_neg:.4f}, Std={std_neg:.4f}")
+            print(f"Positive Component: Mean={mean_pos:.4f}, Std={std_pos:.4f}")
 
-        means = gmm.means_.flatten()
-        covariances = gmm.covariances_.flatten()
-        weights = gmm.weights_.flatten()
-        print(f"GMM Means: {means}")
-        print(f"GMM Covariances: {covariances}")
-        print(f"GMM Weights: {weights}")
+            if std_neg < 1e-6 or std_pos < 1e-6:
+                 print(f"Warning: GMM component standard deviation is near zero (neg_std:{std_neg:.4g}, pos_std:{std_pos:.4g}). Theoretical AUROC GMM might be unreliable. Defaulting to 0.5.")
+                 auroc_gmm_val = 0.5
+            else:
+                min_val = min(0.0, np.min(X) - 0.1)
+                max_val = max(1.0, np.max(X) + 0.1)
+                thresholds = np.linspace(min_val, max_val, num=500)
+                print(f"Thresholds for theoretical ROC: min={min_val:.4f}, max={max_val:.4f}, count={len(thresholds)}")
+                print(f"Sample thresholds (first 5): {thresholds[:5]}")
 
-        # Sort components by means to identify "positive" and "negative" components
-        # This script's GMM AUROC uses roc_auc_score with GMM posteriors, not theoretical curves.
-        sorted_idx = np.argsort(means)
-        pos_component_idx = sorted_idx[1]  # Higher mean component is assumed positive
-        neg_component_idx = sorted_idx[0]
-        print(f"Positive component index (higher mean): {pos_component_idx}, Negative component index: {neg_component_idx}")
+                tpr_theoretical = 1 - norm.cdf(thresholds, loc=mean_pos, scale=std_pos)
+                fpr_theoretical = 1 - norm.cdf(thresholds, loc=mean_neg, scale=std_neg)
+                print(f"Theoretical TPR (first 5): {tpr_theoretical[:5]}")
+                print(f"Theoretical FPR (first 5): {fpr_theoretical[:5]}")
 
-        # Calculate posterior probabilities for the identified positive component
-        posteriors = gmm.predict_proba(X)[:, pos_component_idx]
-        print(f"GMM Posteriors for positive component (first 10): {posteriors[:10]}")
+                fpr_sorted = fpr_theoretical[::-1]
+                tpr_sorted = tpr_theoretical[::-1]
+                
+                fpr_final = np.concatenate(([0], fpr_sorted, [1]))
+                tpr_final = np.concatenate(([0], tpr_sorted, [1]))
 
-        # Calculate AUROC using posteriors and binary labels
-        if len(np.unique(binary_labels)) < 2:
-            print("Warning: Only one class present in binary_labels. AUROC is not defined, defaulting to 0.5.")
+                unique_fpr, unique_indices = np.unique(fpr_final, return_index=True)
+                fpr_final = unique_fpr
+                tpr_final = tpr_final[unique_indices]
+                print(f"FPR for AUC (first 10 after unique and sort): {fpr_final[:10]}")
+                print(f"TPR for AUC (first 10 after unique and sort): {tpr_final[:10]}")
+                
+                valid_pts = ~ (np.isnan(fpr_final) | np.isinf(fpr_final) | np.isnan(tpr_final) | np.isinf(tpr_final))
+                fpr_final = fpr_final[valid_pts]
+                tpr_final = tpr_final[valid_pts]
+
+                sort_order = np.argsort(fpr_final)
+                fpr_final = fpr_final[sort_order]
+                tpr_final = tpr_final[sort_order]
+
+                if len(fpr_final) > 1 and len(tpr_final) > 1:
+                    auroc_gmm_val = auc(fpr_final, tpr_final)
+                    print(f"Calculated Theoretical AUROC GMM: {auroc_gmm_val:.4f}")
+                else:
+                    print("Warning: Not enough valid points to calculate Theoretical AUROC GMM. Defaulting to 0.5.")
+                    auroc_gmm_val = 0.5
+        
+        except ValueError as e:
+            print(f"ValueError during GMM fitting or Theoretical AUROC calculation: {e}. Defaulting AUROC GMM to 0.5.")
             auroc_gmm_val = 0.5
-        else:
-            auroc_gmm_val = roc_auc_score(binary_labels, posteriors)
-            print(f"Calculated AUROC GMM: {auroc_gmm_val}")
+        except Exception as e:
+            print(f"Unexpected error during Theoretical GMM AUROC calculation: {e}. Defaulting AUROC GMM to 0.5.")
+            auroc_gmm_val = 0.5
 
-    except ValueError as e:
-        print(f"ValueError during GMM fitting or AUROC calculation: {e}. Defaulting AUROC GMM to 0.5.")
-        auroc_gmm_val = 0.5
-    except Exception as e:
-        print(f"Unexpected error during GMM AUROC calculation: {e}. Defaulting AUROC GMM to 0.5.")
-        auroc_gmm_val = 0.5
-
-    # 2. Percentile rank and EPR calculation
+    # Percentile rank and EPR calculation (remains the same)
     print("\n-- Percentile Rank & EPR Calculation --")
-    # Calculate percentile ranks for all samples
-    # Ensure there's more than one rank to avoid division by zero if all probs are same
-    if len(probabilities) > 1 and np.max(probabilities) != np.min(probabilities):
-        ranks = rankdata(probabilities, method='average')
-        percentile_ranks = (ranks - 1) / (len(ranks) - 1) 
-    else: # Handle cases with single sample or all probabilities being identical
-        percentile_ranks = np.zeros_like(probabilities) if len(probabilities) > 0 else np.array([])
-    
-    print(f"Percentile ranks (first 10): {percentile_ranks[:10]}")
-
-    # Calculate percentile ranks for labeled positives
-    labeled_pos_ranks = percentile_ranks[labeled_pos_indices]
-    print(f"Labeled positive ranks (all): {labeled_pos_ranks}")
-
-    # Calculate area under percentile rank curve (AUPRC)
-    if len(labeled_pos_ranks) > 0:
-        sorted_ranks = np.sort(labeled_pos_ranks)
-        n_pos = len(sorted_ranks)
-        print(f"Sorted labeled positive ranks (for AUPRC): {sorted_ranks}")
-        if n_pos > 1:
-            x_values_for_auprc = np.arange(1, n_pos + 1) / n_pos
-            print(f"X-values for AUPRC: {x_values_for_auprc}")
-            auprc_val = np.trapz(sorted_ranks, x=x_values_for_auprc)
-        elif n_pos == 1: # If only one positive, AUPRC is its rank (or 0 if we consider area)
-             auprc_val = float(sorted_ranks[0]) # Or interpret as you see fit for single point
-        # If n_pos is 0, auprc_val remains 0.0 as initialized
-        print(f"Calculated AUPRC: {auprc_val}")
+    if len(labeled_pos_indices) == 0:
+        print("Warning: No valid labeled positive indices for AUPRC/EPR. Returning default values for AUPRC/EPR.")
     else:
-        print("No labeled positive ranks to calculate AUPRC.")
+        if len(probabilities) > 1 and np.max(probabilities) != np.min(probabilities):
+            ranks = rankdata(probabilities, method='average')
+            percentile_ranks = (ranks - 1) / (len(ranks) - 1)
+        else:
+            percentile_ranks = np.zeros_like(probabilities) if len(probabilities) > 0 else np.array([])
+        print(f"Percentile ranks (first 10): {percentile_ranks[:10]}")
 
-    # Calculate EPR (proportion of labeled positives in top k%)
-    k = 0.1  # Top 10%
-    threshold_epr = 1 - k
-    print(f"EPR k: {k}, EPR threshold (percentile > {threshold_epr})")
-    if len(labeled_pos_ranks) > 0:
-        epr_val = np.mean(labeled_pos_ranks > threshold_epr)
-        print(f"EPR (mean of labeled_pos_ranks > {threshold_epr}): {epr_val}")
-    else:
-        print("No labeled positive ranks to calculate EPR.")
+        labeled_pos_ranks = percentile_ranks[labeled_pos_indices]
+        print(f"Labeled positive ranks (all): {labeled_pos_ranks}")
 
-    print("--- End calculate_pu_metrics DEBUG LOGS ---")
+        if len(labeled_pos_ranks) > 0:
+            sorted_ranks = np.sort(labeled_pos_ranks)
+            n_pos = len(sorted_ranks)
+            print(f"Sorted labeled positive ranks (for AUPRC): {sorted_ranks}")
+            if n_pos > 1:
+                x_values_for_auprc = np.arange(1, n_pos + 1) / n_pos
+                print(f"X-values for AUPRC: {x_values_for_auprc}")
+                auprc_val = np.trapz(sorted_ranks, x=x_values_for_auprc)
+            elif n_pos == 1:
+                 auprc_val = float(sorted_ranks[0])
+            print(f"Calculated AUPRC: {auprc_val:.4f}")
+        else:
+            print("No labeled positive ranks to calculate AUPRC.")
+            auprc_val = 0.0 # Ensure it's explicitly 0 if no labeled_pos_ranks
+
+        k = 0.1
+        threshold_epr = 1 - k
+        print(f"EPR k: {k}, EPR threshold (percentile > {threshold_epr})")
+        if len(labeled_pos_ranks) > 0:
+            epr_val = np.mean(labeled_pos_ranks > threshold_epr)
+            print(f"EPR (mean of labeled_pos_ranks > {threshold_epr}): {epr_val:.4f}")
+        else:
+            print("No labeled positive ranks to calculate EPR.")
+            epr_val = 0.0 # Ensure it's explicitly 0
+
+    print("--- End calculate_pu_metrics (v2) DEBUG LOGS ---")
     return {
         'auroc_gmm': float(auroc_gmm_val),
         'auprc': float(auprc_val),
@@ -404,22 +387,20 @@ def calculate_pu_metrics(probabilities, true_labels, labeled_pos_indices):
 
 
 def main(args):
-    # Print GPU information
     if torch.cuda.is_available():
         print(f"Available GPUs: {torch.cuda.device_count()}")
         for i in range(torch.cuda.device_count()):
             print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
 
-    experiment_name = "pu_learning_fixed_holdout_train_val_only"  # Updated experiment name
+    experiment_name = "pu_learning_gmm_v2_train_val_only_23_05" # Modified experiment name
     log_dir = os.path.join(args.log_dir, experiment_name)
     os.makedirs(log_dir, exist_ok=True)
     csv_logger = CSVLogger(
         save_dir=args.log_dir,
         name=experiment_name,
-        version=datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),  # Unique version
+        version=datetime.datetime.now().strftime("%Y%m%d_%H%M%S"), # Unique version
         flush_logs_every_n_steps=10
     )
-    # Read file paths
     with open(args.file_paths, 'r') as f:
         lines = f.readlines()
     mzml_files = [line.split(",")[0].strip() for line in lines]
@@ -430,7 +411,6 @@ def main(args):
     labels = np.array(labels, dtype=np.int64)
     indices = np.arange(len(combined_dataset))
 
-    # Print dataset statistics
     print(f"Total samples: {len(indices)}")
     print(f"Positive samples: {np.sum(labels == 1)}")
     print(f"Unlabeled samples: {np.sum(labels == 0)}")
@@ -440,90 +420,73 @@ def main(args):
 
     # Split: train/val using stratified split (70% train, 30% val)
     train_indices, val_indices = train_test_split(
-        indices,  # Use all indices
-        test_size=0.3,  # 30% for validation
+        indices, # Use all indices
+        test_size=0.3, # 30% for validation
         random_state=SEED,
-        stratify=labels  # Stratify on all labels
+        stratify=labels # Stratify on all labels
     )
 
-    # Verify positive samples in each set
     train_labels = labels[train_indices]
     val_labels = labels[val_indices]
 
-    print("\nSplit Statistics:")
+    print("\\nSplit Statistics:")
     print(f"Training set: {len(train_indices)} samples, {np.sum(train_labels == 1)} positives")
     print(f"Validation set: {len(val_indices)} samples, {np.sum(val_labels == 1)} positives")
 
     # --- Fixed hold-out logic (applied to the 70% training set) ---
     positive_train_indices = train_indices[train_labels == 1]
     hold_out_ratio = args.hold_out_ratio
-    
+
     if len(positive_train_indices) == 0:
         print("Warning: No positive samples in the initial training split to create a hold-out set.")
         holdout_pos_indices = np.array([], dtype=int)
-        train_indices_no_holdout = train_indices.copy()  # Use original train_indices
+        train_indices_no_holdout = train_indices.copy()
     else:
         n_hold_out = max(1, int(np.ceil(len(positive_train_indices) * hold_out_ratio)))
         if n_hold_out >= len(positive_train_indices):
             n_hold_out = len(positive_train_indices) - 1 if len(positive_train_indices) > 1 else 0
-            if n_hold_out < 1 and len(positive_train_indices) > 1 :
+            if n_hold_out < 1 and len(positive_train_indices) > 1:
                  print("Warning: Adjusted n_hold_out to be less than total positives in training. Hold-out set might be very small or empty.")
 
-        if n_hold_out == 0 :
+        if n_hold_out == 0:
             print("Warning: Calculated n_hold_out is 0. No samples for hold-out set from training positives. C-estimation might be impacted.")
             holdout_pos_indices = np.array([], dtype=int)
             train_indices_no_holdout = train_indices.copy()
         else:
-            # Split hold-out positives from the training positives
-            # Ensure positive_train_indices is not empty before splitting
             if len(positive_train_indices) > n_hold_out:
                  _, holdout_pos_indices = train_test_split(
                     positive_train_indices,
                     test_size=n_hold_out,
                     random_state=SEED
-                    # No stratification needed as we are splitting from positives only
                 )
                  train_indices_no_holdout = np.setdiff1d(train_indices, holdout_pos_indices)
-            elif len(positive_train_indices) > 0: # if positive_train_indices has elements but not enough for n_hold_out
+            elif len(positive_train_indices) > 0:
                  print(f"Warning: Not enough positive samples ({len(positive_train_indices)}) for the desired hold_out_ratio resulting in n_hold_out={n_hold_out}. Using all available positives for holdout.")
                  holdout_pos_indices = positive_train_indices.copy()
                  train_indices_no_holdout = np.setdiff1d(train_indices, holdout_pos_indices)
-            else: # Should have been caught by len(positive_train_indices) == 0 earlier
+            else:
                  holdout_pos_indices = np.array([], dtype=int)
                  train_indices_no_holdout = train_indices.copy()
-
-
-    print(f"\nHold-out set: {len(holdout_pos_indices)} positive samples (from training set)")
+    
+    print(f"\\nHold-out set: {len(holdout_pos_indices)} positive samples (from training set)")
     print(f"Training set after hold-out: {len(train_indices_no_holdout)} samples")
 
-    train_labels_no_holdout = labels[train_indices_no_holdout] # Get labels for the final training set
+    train_labels_no_holdout = labels[train_indices_no_holdout]
     if np.sum(train_labels_no_holdout == 1) == 0 and len(train_indices_no_holdout) > 0:
-        print("Warning: No positive samples left in training set after hold-out! This may be intended if all positives are in holdout, or training set became empty of positives.")
+        print("Warning: No positive samples left in training set after hold-out!")
 
-
-    # Model initialization
     model = SimpleSpectraTransformer(
-        d_model=args.d_model,
-        n_layers=args.n_layers,
-        dropout=args.dropout,
-        lr=args.lr,
-        instrument_embedding_dim=args.instrument_embedding_dim
-    )
-
-    wrapper_args = dict(
-        model=model,
-        dataset=combined_dataset,
-        d_model=args.d_model,
-        n_layers=args.n_layers,
-        dropout=args.dropout,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        epochs=args.epochs,
-        num_workers=args.num_workers,
-        instrument_embedding_dim=args.instrument_embedding_dim,
-        logger=csv_logger
+        d_model=args.d_model, n_layers=args.n_layers, dropout=args.dropout,
+        lr=args.lr, instrument_embedding_dim=args.instrument_embedding_dim
     )
     
+    wrapper_args = dict(
+        model=model, dataset=combined_dataset, d_model=args.d_model, n_layers=args.n_layers,
+        dropout=args.dropout, lr=args.lr, batch_size=args.batch_size, epochs=args.epochs,
+        num_workers=args.num_workers, instrument_embedding_dim=args.instrument_embedding_dim,
+        logger=csv_logger
+    )
+
     try:
         pytorch_model = ImprovedPyTorchSklearnWrapper(**wrapper_args, force_cpu=args.force_cpu)
     except Exception as e:
@@ -536,52 +499,29 @@ def main(args):
         )
         pytorch_model = ImprovedPyTorchSklearnWrapper(**wrapper_args, model=model_cpu, force_cpu=True)
 
-
-    # Callback for per-epoch PU metrics
     pu_callback = FixedHoldoutPUCallback(
-        wrapper=pytorch_model,
-        train_indices=train_indices_no_holdout,
-        val_indices=val_indices,
-        holdout_pos_indices=holdout_pos_indices, # These are from the training data
-        dataset=combined_dataset
+        wrapper=pytorch_model, train_indices=train_indices_no_holdout,
+        val_indices=val_indices, holdout_pos_indices=holdout_pos_indices, dataset=combined_dataset
     )
 
-    # Train the model using the wrapper's fit method with validation data and callback
-    _, trainer = pytorch_model.fit(
-        train_indices=train_indices_no_holdout,
-        val_indices=val_indices,
-        callbacks=[pu_callback]
+    pytorch_model.fit(
+        train_indices=train_indices_no_holdout, val_indices=val_indices, callbacks=[pu_callback]
     )
-
-    # --- After training: Final summary ---
-    # No test set evaluation. The validation metrics are logged by the callback.
     
-    final_metrics_summary = {}
-    # Optionally, re-calculate and log final validation metrics here if needed,
-    # or rely on the last epoch's logged validation metrics.
-    # For simplicity, we will just save the model and hyperparameters.
-
-    print("\nTraining finished.")
-    
-    # Save model and summary
+    print("\\nTraining finished.")
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_save_path = os.path.join(log_dir, f"pu_model_{timestamp}.pt")
+    model_save_path = os.path.join(log_dir, f"pu_model_v2_{timestamp}.pt") # Keep v2 in model name
     torch.save(pytorch_model.model.state_dict(), model_save_path)
     
-    summary_path = os.path.join(log_dir, f"experiment_summary_{timestamp}.txt")
+    summary_path = os.path.join(log_dir, f"experiment_summary_v2_{timestamp}.txt") # Keep v2 in summary name
     with open(summary_path, 'w') as f:
-        f.write("=== Experiment Summary ===\n\n")
-        f.write("Hyperparameters:\n")
+        f.write("=== Experiment Summary (v2 GMM AUROC, Train/Val Only) ===\\n\\n")
+        f.write("Hyperparameters:\\n")
         for param, value in vars(args).items():
-            f.write(f"{param}: {value}\n")
-        # Add last epoch's validation metrics to summary if desired
-        # last_val_metrics = trainer.logged_metrics # Access logged metrics
-        # f.write("\nLast Validation Metrics (from CSVLogger):\n")
-        # for metric, value in last_val_metrics.items():
-        #    if 'pu_val' in metric or 'estimated_c_epoch' in metric : # Log relevant validation metrics
-        #        f.write(f"{metric}: {value:.4f}\n")
+            f.write(f"{param}: {value}\\n")
+        # Validation metrics are logged by the callback and CSVLogger
 
-    print(f"\nModel saved to {model_save_path}")
+    print(f"\\nModel saved to {model_save_path}")
     print(f"Experiment summary saved to {summary_path}")
     print(f"Logs can be found in: {log_dir}")
 
@@ -598,8 +538,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.0002269876583, help="Learning rate")
     parser.add_argument("--epochs", type=int, default=50, help="Number of epochs")
     parser.add_argument("--hold_out_ratio", type=float, default=0.1, help="Hold-out ratio for PU learning")
-    parser.add_argument("--instrument_embedding_dim", type=int, default=16,
-                        help="Dimension of the instrument embedding output")
+    parser.add_argument("--instrument_embedding_dim", type=int, default=16, help="Dimension of the instrument embedding output")
     parser.add_argument("--force_cpu", action="store_true", help="Force using CPU instead of GPU/MPS")
     args = parser.parse_args()
-    main(args)
+    main(args) 
