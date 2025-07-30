@@ -280,6 +280,25 @@ class FixedHoldoutPUCallback(Callback):
         if trainer.logger is not None:
             log_dir = trainer.logger.log_dir
 
+        # --- NEW: Save validation probabilities (original and adjusted) to CSV ---
+        if log_dir is not None:
+            import pandas as pd
+            epoch = trainer.current_epoch
+            # Use self.val_indices as absolute indices for the validation set
+            abs_indices = self.val_indices
+            # Defensive: ensure lengths match
+            if len(abs_indices) == len(val_probs_s1) == len(val_probs_y1_adjusted):
+                df = pd.DataFrame({
+                    'absolute_index': abs_indices,
+                    'probability_original': val_probs_s1,
+                    'probability_adjusted': val_probs_y1_adjusted
+                })
+                csv_path = os.path.join(log_dir, f'val_probs_epoch_elkanato_{epoch}.csv')
+                df.to_csv(csv_path, index=False)
+                print(f"Saved validation probabilities to {csv_path}")
+            else:
+                print(f"Warning: Length mismatch for CSV logging: abs_indices({len(abs_indices)}), val_probs_s1({len(val_probs_s1)}), val_probs_y1_adjusted({len(val_probs_y1_adjusted)})")
+
         additional_pu_metrics = calculate_pu_metrics(
             probabilities=val_probs_y1_adjusted,
             true_labels=val_true_labels_for_pu_calc,
@@ -298,8 +317,7 @@ class FixedHoldoutPUCallback(Callback):
                                   average='binary', pos_label=1, zero_division=0),
             'estimated_c_epoch': float(estimated_c),
             'pu_val_auroc_gmm': additional_pu_metrics['auroc_gmm'],
-            'pu_val_auprc': additional_pu_metrics['auprc'],
-            'pu_val_epr': additional_pu_metrics['epr']
+            'val_area_under_percentile_ranks': additional_pu_metrics['val_area_under_percentile_ranks']
         }
         if trainer.logger is not None:
             trainer.logger.log_metrics(metrics, step=trainer.current_epoch)
@@ -464,7 +482,6 @@ def calculate_pu_metrics(probabilities, true_labels, labeled_pos_indices, epoch=
         print(f"Adjusted labeled_pos_indices count from {original_count} to {len(labeled_pos_indices)}")
 
     auprc_val = 0.0
-    epr_val = 0.0
     auroc_gmm_val = 0.5  # Default value
     fitted_gmm = None
 
@@ -523,9 +540,9 @@ def calculate_pu_metrics(probabilities, true_labels, labeled_pos_indices, epoch=
             print(f"Error during Theoretical GMM AUROC (v2 script): {e}. Defaulting to 0.5.")
             auroc_gmm_val = 0.5
 
-    print("\n-- Percentile Rank & EPR Calculation (v2 script) --")
+    print("\n-- Percentile Rank & AUPRC Calculation (v2 script) --")
     if len(labeled_pos_indices) == 0:
-        print("Warning (v2 script): No valid labeled positive for AUPRC/EPR.")
+        print("Warning (v2 script): No valid labeled positive for AUPRC.")
     else:
         if len(probabilities) > 1 and np.max(probabilities) != np.min(probabilities):
             ranks = rankdata(probabilities, method='average')
@@ -549,17 +566,9 @@ def calculate_pu_metrics(probabilities, true_labels, labeled_pos_indices, epoch=
             print(f"Calculated AUPRC: {auprc_val:.4f}")
         else:
             print("No labeled_pos_ranks for AUPRC.")
-        k = 0.1;
-        threshold_epr = 1 - k;
-        print(f"EPR k={k}, threshold={threshold_epr}")
-        if len(labeled_pos_ranks) > 0:
-            epr_val = np.mean(labeled_pos_ranks > threshold_epr);
-            print(f"EPR: {epr_val:.4f}")
-        else:
-            print("No labeled_pos_ranks for EPR.")
 
     print("--- End calculate_pu_metrics (v2) DEBUG LOGS ---")
-    return {'auroc_gmm': float(auroc_gmm_val), 'auprc': float(auprc_val), 'epr': float(epr_val)}
+    return {'auroc_gmm': float(auroc_gmm_val), 'val_area_under_percentile_ranks': float(auprc_val)}
 
 
 def main(args):

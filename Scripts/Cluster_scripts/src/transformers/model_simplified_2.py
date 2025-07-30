@@ -1,3 +1,4 @@
+
 import torch
 import torch.nn as nn
 import lightning.pytorch as pl
@@ -9,11 +10,13 @@ from depthcharge.encoders import FloatEncoder
 
 class MyModel(SpectrumTransformerEncoder):
     """Our custom model class."""
+
     def __init__(self, *args, **kwargs):
         """Add parameters for the global token hook."""
         super().__init__(*args, **kwargs)
         self.precursor_mz_encoder = FloatEncoder(self.d_model)
         self.apply(self.init_weights)
+
     def global_token_hook(self, mz_array, intensity_array, precursor_mz=None, *args, **kwargs):
         """Return a simple representation of the precursor."""
         if precursor_mz is None:
@@ -23,11 +26,11 @@ class MyModel(SpectrumTransformerEncoder):
         precursor_mz = precursor_mz.type_as(mz_array).view(-1, 1)
         # print(f"precursor_mz shape: {precursor_mz.shape}")  # Debug statement
 
-            # Encode the precursor m/z
+        # Encode the precursor m/z
         mz_rep = self.precursor_mz_encoder(precursor_mz)
         # print(f"mz_rep shape before squeeze: {mz_rep.shape}")  # Debug statement
 
-            # Squeeze the sequence length dimension if necessary
+        # Squeeze the sequence length dimension if necessary
         if mz_rep.dim() == 3 and mz_rep.shape[1] == 1:
             mz_rep = mz_rep.squeeze(1)
             # print(f"mz_rep shape after squeeze: {mz_rep.shape}")  # Debug statement
@@ -58,12 +61,13 @@ class SimpleSpectraTransformer(pl.LightningModule):
             dropout=0.1,
             lr=0.001,
             #  New or extended hyperparameters:
-            hidden_fc1: int = 16,
+            hidden_fc1: int = 64,
             instrument_embedding_dim: int = 16,
             encoder_lr: float = 1e-4,
             linear_lr: float = 1e-3,
             weight_decay: float = 1e-3,
             optimizer_name: str = "AdamW",
+            validation_threshold: float = 0.95
     ):
         """Initialize the model with transformer for spectra only."""
         super().__init__()
@@ -90,7 +94,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
             dropout=dropout,
 
         )
-        #adding complexity by 1 linear layer
+        # adding complexity by 1 linear layer
         self.fc_instrument_1 = nn.Linear(20, hidden_fc1)
         self.fc_instrument_2 = nn.Linear(hidden_fc1, instrument_embedding_dim)
         # Fully connected layers for binary classification
@@ -101,7 +105,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
         # class_weights = torch.tensor([1 - 0.17, 0.17], dtype=torch.float32)  # Adjust weights based on proportions
 
-        #self.bce_loss = nn.BCEWithLogitsLoss(pos_weight=class_weights[1])
+        # self.bce_loss = nn.BCEWithLogitsLoss(pos_weight=class_weights[1])
         self.bce_loss = nn.BCEWithLogitsLoss()
 
         # Define metrics for training and validation
@@ -113,6 +117,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.train_recall = BinaryRecall()
         self.val_f1 = BinaryF1Score()
         self.val_recall = BinaryRecall()
+        self.validation_threshold = validation_threshold
         # Apply He initialization to all relevant layers
         self.apply(self.init_weights)
         if torch.distributed.is_initialized():
@@ -131,6 +136,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
             nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='relu')
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
+
     def forward(self, batch):
         """Forward pass through the transformer and classification layers."""
         # Spectra data (m/z and intensity) processing with SpectrumTransformerEncoder
@@ -149,7 +155,6 @@ class SimpleSpectraTransformer(pl.LightningModule):
         instrument_emb = self.fc_instrument_1(instrument_settings)
         instrument_emb = self.relu(instrument_emb)
 
-
         # Add debug statements to check the magnitude of embeddings
         # print("Spectra embedding magnitude:", spectra_emb.abs().mean().item())
         # print("Instrument embedding magnitude after the first linear layer:", instrument_emb.abs().mean().item())
@@ -159,7 +164,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
         combined_emb = torch.cat((spectra_emb, instrument_emb), dim=-1)
         # print(combined_emb[0,:10])
         # print(combined_emb[0,-10:])
-        combined_emb=self.fc_combined(combined_emb)
+        combined_emb = self.fc_combined(combined_emb)
         combined_emb = self.relu(combined_emb)
         # quit()
 
@@ -201,8 +206,14 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         """A single validation step."""
-        loss, preds, targets = self.step(batch)
+        logits = self(batch)
+        targets = batch["labels"].int()
+        loss = self.bce_loss(logits.view(-1, 1), targets.view(-1, 1).float())
+
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+
+        probs = torch.sigmoid(logits)
+        preds = (probs >= self.validation_threshold).int()
 
         # Update metrics
         self.val_accuracy.update(preds, targets)
@@ -216,7 +227,8 @@ class SimpleSpectraTransformer(pl.LightningModule):
         # self.log("val_f1", self.val_f1, on_step=False, on_epoch=True, prog_bar=True)
         # self.log("val_recall", self.val_recall, on_step=False, on_epoch=True, prog_bar=True)
 
-        return loss
+        # Return both loss and logits
+        return {'loss': loss, 'logits': self(batch), 'labels': targets.view(-1, 1)}
 
     def on_train_epoch_end(self):
         """Reset training metrics at the end of each epoch."""
@@ -290,11 +302,9 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
         # 2) Choose optimizer
         if self.optimizer_name.lower() == "adam":
-            optimizer = torch.optim.Adam(param_groups)
+            optimizer = torch.optim.Adam(param_groups, eps=1e-4, )
         else:
             # Default
-            optimizer = torch.optim.AdamW(param_groups,
-                                          eps=1e-4,
-                                          )
+            optimizer = torch.optim.AdamW(param_groups, eps=1e-4, )
 
         return optimizer

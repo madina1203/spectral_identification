@@ -67,6 +67,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
             linear_lr: float = 1e-3,
             weight_decay: float = 1e-3,
             optimizer_name: str = "AdamW",
+            validation_threshold: float = 0.5
     ):
         """Initialize the model with transformer for spectra only."""
         super().__init__()
@@ -116,6 +117,7 @@ class SimpleSpectraTransformer(pl.LightningModule):
         self.train_recall = BinaryRecall()
         self.val_f1 = BinaryF1Score()
         self.val_recall = BinaryRecall()
+        self.validation_threshold = validation_threshold
         # Apply He initialization to all relevant layers
         self.apply(self.init_weights)
         if torch.distributed.is_initialized():
@@ -204,8 +206,14 @@ class SimpleSpectraTransformer(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         """A single validation step."""
-        loss, preds, targets = self.step(batch)
+        logits = self(batch)
+        targets = batch["labels"].int()
+        loss = self.bce_loss(logits.view(-1, 1), targets.view(-1, 1).float())
+
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+
+        probs = torch.sigmoid(logits)
+        preds = (probs >= self.validation_threshold).int()
 
         # Update metrics
         self.val_accuracy.update(preds, targets)
